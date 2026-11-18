@@ -218,7 +218,8 @@ class Devpush:
 
     def ls(self, rel):
         rc, out = self.call("ls", rel)
-        return out.splitlines() if rc == 0 else None
+        if rc == 0: return out.splitlines()
+        return [] if re.search(r"NoSuchFile|not exist|not found|ENOENT|error 8\b", out, re.I) else None
 
     def du(self, *rels):   # 量这几个目录的占用（只读文件信息）→ {目录: (字节, 文件数) | None（不在）}；工具太旧（没有 du）/ 断开 / 锁屏 → None
         rc, out = self.call("du", *rels)
@@ -270,8 +271,45 @@ class Devpush:
         rc, out = self.call("tar-ok", rel)
         return rc == 0 and out.strip().endswith("ok")
 
-    def put_tar(self, lst, root, rel):
-        rc, out = self.call("put-tar", lst, root, rel)
+    def put_tar(self, lst, root, rel, resume=False):
+        # Forward transport counters while the child runs, not after a whole batch.
+        op = "resume-tar" if resume else "put-tar"
+        output = []
+        try:
+            process = subprocess.Popen([self.exe, self.udid, self.bid, op, str(lst), str(root), rel],
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                       encoding="utf-8", errors="replace", env=self.env)
+        except OSError as e:
+            raise Fail("无法启动上传工具") from e
+        try:
+            for line in process.stdout:
+                match = re.fullmatch(r"S2A_UPLOAD_BYTES (\d+)\s*", line)
+                if match:
+                    callback = getattr(self, "upload_progress", None)
+                    if callback: callback(int(match.group(1)))
+                    continue
+                resumed = re.fullmatch(r"S2A_RESUME_BYTES (\d+)\s*", line)
+                if resumed:
+                    self.last_resumed_bytes = int(resumed.group(1))
+                    continue
+                output.append(line.rstrip())
+                output = output[-20:]
+            rc = process.wait()
+        except BaseException:
+            # A cancelled reader must not leave its writer running on the phone.
+            # Stop only this child, never other transfer/game processes.
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            raise
+        finally:
+            process.stdout.close()
+            with open(self.work / "devpush.log", "a", encoding="utf-8") as log:
+                log.write(f"[{time.strftime('%H:%M:%S')}] {op} rc={process.returncode}\n")
+        out = "\n".join(output)
         if rc:
             raise Fail(f"资源包写进 iPhone 时中断（{out.splitlines()[-1] if out else f'退出码 {rc}'}）：确认手机解锁、数据线插稳后再点一次")   # 哪个文件写进 devpush.log
         return "stream"
@@ -408,16 +446,39 @@ class Devicectl:
 
     def ls(self, rel):
         rc, out = self.dcp(60, "device", "info", "files", *self.container(), "--subdirectory", rel, "--no-recurse")
-        return out.splitlines() if rc == 0 else None
+        if rc == 0: return out.splitlines()
+        if re.search(r"No such file|not exist|not found|ENOENT|error code 2[^0-9]|error 2[^0-9]", out, re.I): return []
+        # macOS 27 / CoreDevice 对尚未建立的子目录（如首次推包前的 Documents/games/<游戏号>/资源包/.incoming）只报泛化的
+        #   CoreDevice.ActionError error 3，不带 ENOENT：有 s2a-devpush 时先借它辨认；否则沿父目录向上查到 Documents，
+        #   只要任一存在且未列出下一级子目录，即证目标目录尚未创建（返回 []）；若连 Documents 都列不出则照旧返回 None 报红
+        if self.dp:
+            r = self.dp.ls(rel)
+            if r is not None: return r
+        cur = Path(rel)
+        while cur.parent != cur and str(cur.parent) != ".":
+            parent, name = str(cur.parent), cur.name
+            prc, pout = self.dcp(60, "device", "info", "files", *self.container(), "--subdirectory", parent, "--no-recurse")
+            if prc == 0:
+                entries = {l.split()[0].rstrip("/") for l in pout.splitlines() if l.strip()}
+                return [] if name not in entries else None
+            if parent == DOCS: break
+            cur = cur.parent
+        return None
 
     def tar_ok(self, rel):   # 没有 s2a-devpush / UDID：判不了（None），调用方当不完整盖掉
         return self.dp.tar_ok(rel) if self.dp else None
 
-    def put_tar(self, lst, root, rel):
+    def put_tar(self, lst, root, rel, resume=False):
         if self.dp:
             try:
-                return self.dp.put_tar(lst, root, rel)
+                self.dp.upload_progress = getattr(self, "upload_progress", None)
+                return self.dp.put_tar(lst, root, rel, resume=resume)
             except Fail as e:
+                if resume:
+                    try:
+                        return self.dp.put_tar(lst, root, rel, resume=False)
+                    except Fail as e2:
+                        e = e2
                 self.say(f"流式推 {Path(rel).name} 没成（{str(e)[-160:]}），这批改走 devicectl")
         tf = self.work / "push.tar"
         try:
@@ -534,38 +595,56 @@ def plan(dev, pack, work, full=False, say=print):
     """算待推批次：写 <work>/push_NNN.tsv（路径 \\t 大小 \\t sha）与 <work>/pushed（续推账）；→ (批数, 文件数, 字节数)"""
     pack, work = Path(pack), Path(work)
     for f in work.glob("push_*.tsv"): f.unlink()
+    (work / "resume_000.tar").unlink(missing_ok=True)
     ver = jver((pack / "manifest.json").read_text(encoding="utf-8") if (pack / "manifest.json").is_file() else "")
     if ver not in (2, 3):   # 3 = v0.3.0 单一 IMG（pack/img.py convert：game.img + 照旧按文件的着色器库 / 覆盖层）
         # 维护者 11-17：「校验不过就整个拒绝」一律撤掉——版本不认只打黄、照常按清单推；真推不了（缺 index.tsv 等）在后面按原因报
         say(f"【黄】资源包清单版本 {ver} 这个工具不认（只认 2、3：{pack}/manifest.json），照常推送")
+    raw_inc = dev.ls(inc(dev))
+    if raw_inc is None:
+        say(f"【红】列不出机上待解目录 {inc(dev)}，停止上传以免叠出重复分卷")
+        raise Fail(f"列机上待解目录失败：{inc(dev)}")
+    names = sorted({m for l in raw_inc for m in STALE.findall(l)})
+    resume_target = None
+    def retire(targets, reason):
+        if not targets: return
+        e = work / "empty.tar"; e.write_bytes(b"\0" * 1024)
+        try:
+            for n in targets:
+                try: dev.put(e, f"{inc(dev)}/{n}")
+                except Fail: say(f"盖掉机上残留推送包 {n} 失败"); raise Fail("盖掉残留推送包失败")
+        finally:
+            e.unlink(missing_ok=True)
+        say(f"机上留着{reason}的推送包 {len(targets)} 个（{' '.join(targets)[:80]}）：已用空包盖掉，不信 .pushed，按已应用索引补推")
     if full:
+        retire(names, "整包重推前待解")
         have, pushed, keep = {}, {}, []
         say("资源包：S2A_PUSH_FULL=1，整包推送")
     else:
-        names = sorted({m for l in (dev.ls(inc(dev)) or []) for m in STALE.findall(l)})
         keep, bad = [], []
         for n in names: (keep if dev.tar_ok(f"{inc(dev)}/{n}") else bad).append(n)
-        if bad:
-            e = work / "empty.tar"; e.write_bytes(b"\0" * 1024)
-            try:
-                for n in bad:
-                    try: dev.put(e, f"{inc(dev)}/{n}")
-                    except Fail: say(f"盖掉机上残留推送包 {n} 失败"); raise Fail("盖掉残留推送包失败")
-            finally:
-                e.unlink(missing_ok=True)
-            say(f"机上留着上次没解完的推送包 {len(bad)} 个（{' '.join(bad)[:80]}）：已用空包盖掉，不信 .pushed，按已应用索引补推")
         unpack = read(dev, unpack_log(dev), work, "r.unpack.pre")
-        cut = bool(bad) or "截短包" in ((unpack or "").strip().splitlines() or [""])[-1]
-        if cut and not bad: say(f"上次收推送撞到截短包（{(unpack or '').strip().splitlines()[-1][:60]}…）：不信 .pushed，按已应用索引补推")
+        cut_log = "截短包" in ((unpack or "").strip().splitlines() or [""])[-1]
+        if cut_log and not bad: say(f"上次收推送撞到截短包（{(unpack or '').strip().splitlines()[-1][:60]}…）：不信 .pushed，按已应用索引补推")
         idx = None
         mf = read(dev, f"{rp(dev)}/manifest.json", work, "r.manifest")
         # v3（单一 IMG）机上同样有 index.applied.tsv：原先只认 v2，IMG 款每次装机都把镜像外的文件整批重推、game.img 再核一遍、App 再解一次包（11-13 实测：同一个包第二次装仍推 37 个文件）
         if jver(mf) in (2, 3) or (mf is not None and not mf.strip()):   # 空清单 = 推送开头置空、没推完（send），已应用索引照信，只补推缺的（不整包重推）
             idx = read(dev, f"{rp(dev)}/index.applied.tsv", work, "r.index")
-            if not idx and not cut: idx = read(dev, f"{rp(dev)}/index.tsv", work, "r.index")
+            if not idx and not (bool(bad) or cut_log): idx = read(dev, f"{rp(dev)}/index.tsv", work, "r.index")
         have = rows(idx, 3)
-        # .pushed 只在机上还有推完整、没解开的批时才算数（推到一半那批的文件不会在里面：一批 put-tar 成功后才追加）
-        pushed = rows(read(dev, f"{rp(dev)}/.pushed", work, "r.pushed"), 2) if keep and not cut else {}   # 有残批 / 上次撞截短包：不信 .pushed
+        raw_pushed = rows(read(dev, f"{rp(dev)}/.pushed", work, "r.pushed"), 2) if (keep or bad) and not cut_log else {}
+        can_resume = bool(getattr(dev, "kind", "") == "devpush" or getattr(dev, "dp", None))
+        if (can_resume and len(bad) == 1 and bad[0] == names[-1] and not cut_log
+                and (not keep or bool(raw_pushed))):
+            resume_target = bad[0]
+            pushed = raw_pushed if keep else {}
+            say(f"机上有待续传分卷 {resume_target}（已完成分卷 {len(keep)} 个）：保留已完成分卷并原地续传该分卷")
+        else:
+            pushed = raw_pushed if keep and not bad and not cut_log else {}
+            if bad or (keep and not pushed):
+                retire(names, "上次没解完或无续推账")
+                keep, pushed = [], {}
         if keep: say(f"机上有推完、还没解开的推送包 {len(keep)} 个：其中 {len(pushed)} 个文件算已推，不重推")
         if have: have = spot_check(dev, pack, work, have, say)
         cut_img = [r for r in have if IMG.fullmatch(r)]   # 账上有镜像才去机上核：没有镜像的包不多一次设备往返
@@ -585,6 +664,10 @@ def plan(dev, pack, work, full=False, say=print):
     bs = batches_of(pack, [w for w in todo if not IMG.fullmatch(w[0])])
     for i, b in enumerate(bs):
         (work / f"push_{i:03d}.tsv").write_text("".join("\t".join(w) + "\n" for w in b), encoding="utf-8")
+    if resume_target and bs:
+        (work / "resume_000.tar").write_text(resume_target, encoding="utf-8")
+    elif resume_target:
+        retire([resume_target], "已无需续传")
     (work / "pushed").write_text("".join(f"{r}\t{h}\n" for r, h in pushed.items()), encoding="utf-8")
     return len(bs), len(todo), sum(int(w[1]) for w in todo)
 
@@ -747,6 +830,10 @@ def _send(dev, pack, work, say=print, progress=None, zp=None):
     pack, work = Path(pack), Path(work)
     files = sorted(work.glob("push_*.tsv"))
     led = work / "pushed"; ledger = led.read_text(encoding="utf-8") if led.is_file() else ""
+    resume_file = work / "resume_000.tar"
+    resume_target = resume_file.read_text(encoding="utf-8").strip() if resume_file.is_file() else ""
+    total = sum(int(line.split("\t")[1]) for f in files for line in f.read_text(encoding="utf-8").splitlines() if line)
+    say(f"上传进度 0/{total} 字节")
     nt = nb = ns = nd = done = 0; ts = int(time.time()); t0 = time.time()
     dl = work / "direct_img.tsv"
     direct = [l.split("\t") for l in dl.read_text(encoding="utf-8").splitlines() if l] if dl.is_file() else []
@@ -892,17 +979,32 @@ def _send(dev, pack, work, say=print, progress=None, zp=None):
       if progress: progress(done, total, step, steps)
     for k, b in enumerate(batches):
         lst = work / "push.lst"; lst.write_text("".join(w[0] + "\n" for w in b), encoding="utf-8")
-        tn = f"{ts}_{k:03d}.tar"
+        resuming = (k == 0 and bool(resume_target))
+        tn = resume_target if resuming else f"{ts}_{k:03d}.tar"
+        sz = sum(int(w[1]) for w in b)
+        reported = 0
+        def upload_cb(n):
+            nonlocal reported
+            current = max(0, min(n, sz))
+            if current > reported:
+                reported = current
+                say(f"上传进度 {done + current}/{total} 字节")
+        dev.upload_progress = upload_cb
+        say(f"正在{'续传' if resuming else '上传'}第 {k + 1}/{len(files)} 批（{sz >> 20} MB）")
         try:
-            how = transfer(dev.put_tar, lst, pack, f"{inc(dev)}/{tn}", size=sum(int(w[1]) for w in b))
+            how = (transfer(dev.put_tar, lst, pack, f"{inc(dev)}/{tn}", True, size=sz)
+                   if resuming else transfer(dev.put_tar, lst, pack, f"{inc(dev)}/{tn}", size=sz))
         except Fail:
             if dev.nospc():
                 say(f"【红】推 {tn} 时测试设备空间满（POSIX 28）"); raise Fail(f"测试设备空间不足（推 {tn} 时 POSIX 28）")
             say(f"推 {tn} 失败"); raise   # 底层已是人话原因（不带内部文件名，#333）；文件名留在上面这行日志
         finally:
             lst.unlink(missing_ok=True)
+            if resuming:
+                resume_file.unlink(missing_ok=True)
         ns += how == "stream"; nd += how != "stream"
-        sz = sum(int(w[1]) for w in b); done += sz; nt += len(b); nb += 1
+        done += sz; nt += len(b); nb += 1
+        say(f"上传进度 {done}/{total} 字节")
         ledger += "".join(f"{w[0]}\t{w[2]}\n" for w in b); led.write_text(ledger, encoding="utf-8"); dev.put(led, f"{rp(dev)}/.pushed")
         if len(files) > 1:
             say(f"  批 {k + 1}/{len(files)}：{sz >> 20} MB，累计 {done / 1e9:.2f} GB，{done / 1e6 / max(time.time() - t0, 1e-3):.1f} MB/s")

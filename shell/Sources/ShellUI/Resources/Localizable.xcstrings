@@ -1,46 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "Go back to the saved moment": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Go back to the saved moment"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Volver al momento guardado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Revenir à l’instant sauvegardé"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存した瞬間に戻る"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "回到上次存下的这一刻"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "回到上次存下的這一刻"
-          }
-        }
-      }
-    },
     "Reorder": {
       "localizations": {
         "en": {
@@ -2441,6 +2401,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "選擇與 Mac 上相同的 iCloud Drive 資料夾。"
+          }
+        }
+      }
+    },
+    "Choose this game's data to get ready to play.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle die Daten dieses Spiels, um es spielbereit zu machen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose this game's data to get ready to play."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige los datos de este juego para prepararte para jugar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez les données de ce jeu pour pouvoir y jouer."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli i dati di questo gioco per poterci giocare."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プレイの準備のため、このゲームのデータを選んでください。"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Välj spelets data för att göra det redo att spela."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择此游戏的数据以开始游戏。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇此遊戲的資料以開始遊戲。"
           }
         }
       }
@@ -13977,46 +13995,6 @@
         }
       }
     },
-    "The iCloud save is from a different version, belongs to another account, or has damaged files, so it didn’t overwrite your progress on this device. To use it, restore it manually in save management.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The iCloud save is from a different version, belongs to another account, or has damaged files, so it didn’t overwrite your progress on this device. To use it, restore it manually in save management."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La partida de iCloud es de otra versión, pertenece a otra cuenta o tiene archivos dañados, así que no sobrescribió tu progreso en este dispositivo. Para usarla, restáurala manualmente en la gestión de partidas."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La sauvegarde iCloud provient d'une autre version, appartient à un autre compte ou contient des fichiers endommagés ; elle n'a donc pas remplacé votre progression sur cet appareil. Pour l'utiliser, restaurez-la manuellement dans la gestion des sauvegardes."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "iCloud のセーブデータはバージョンが異なるか、別のアカウントのものか、破損したファイルを含むため、このデバイスの進行状況は上書きしませんでした。使う場合はセーブデータ管理から手動で復元してください。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "云端有一份和本机不同版本、属于另一个账号或有文件损坏的存档，没有自动覆盖你本机的进度；要用它可以在存档管理里手动恢复。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "雲端有一份和本機不同版本、屬於另一個帳號或有檔案損壞的存檔，沒有自動覆蓋你本機的進度；要用它可以在存檔管理裡手動恢復。"
-          }
-        }
-      }
-    },
     "The save service didn’t return a valid result.": {
       "localizations": {
         "en": {
@@ -16333,6 +16311,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在安裝這款遊戲，請別退出 App。"
+          }
+        }
+      }
+    },
+    "Connect this iPhone to the computer again to continue.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect this iPhone to the computer again to continue."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecta este iPhone al ordenador de nuevo para continuar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnectez cet iPhone à l'ordinateur pour continuer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この iPhone をコンピュータに再接続して続行してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请重新连接电脑继续传输。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "請重新連線電腦繼續傳輸。"
           }
         }
       }
@@ -20865,6 +20883,2780 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld 天前"
+          }
+        }
+      }
+    },
+    "%@ · %@ batches · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ batches · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ 个分卷 · %@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ 个分卷 · %@"
+          }
+        }
+      }
+    },
+    "%@ · %@ files · Allocated %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ files · Allocated %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ 个文件 · 分配空间 %@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@ 个文件 · 分配空间 %@"
+          }
+        }
+      }
+    },
+    "%@ · %@: batch directory is unreadable or contains unknown files, links, or multiple hard links; kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@: batch directory is unreadable or contains unknown files, links, or multiple hard links; kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@：分卷目录不可读或含未知文件、链接、多重硬链接，已保留。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@：分卷目录不可读或含未知文件、链接、多重硬链接，已保留。"
+          }
+        }
+      }
+    },
+    "%@. Cannot be undone; unpacked games and saves are not deleted. Cancel if the transfer has not stopped.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Cannot be undone; unpacked games and saves are not deleted. Cancel if the transfer has not stopped."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@。不能撤销；不删除已解包游戏或存档。如传输尚未停止，请取消。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@。不能撤销；不删除已解包游戏或存档。如传输尚未停止，请取消。"
+          }
+        }
+      }
+    },
+    "%@: could not list directory completely; unverified items were kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: could not list directory completely; unverified items were kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：无法完整列出目录，已保留无法核实的内容。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：无法完整列出目录，已保留无法核实的内容。"
+          }
+        }
+      }
+    },
+    "%@: directory cannot be read safely; deletion is unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: directory cannot be read safely; deletion is unavailable."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：目录无法安全读取，未提供删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：目录无法安全读取，未提供删除。"
+          }
+        }
+      }
+    },
+    "1P–4P Multiplayer Controller Assignment": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P–4P Multiplayer Controller Assignment"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P–4P 多人手柄分配"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P–4P 多人手柄分配"
+          }
+        }
+      }
+    },
+    "1P input source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P input source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P 输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1P 输入源"
+          }
+        }
+      }
+    },
+    "2P input source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2P input source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2P 输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2P 输入源"
+          }
+        }
+      }
+    },
+    "3P input source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3P input source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3P 输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3P 输入源"
+          }
+        }
+      }
+    },
+    "4P input source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4P input source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4P 输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4P 输入源"
+          }
+        }
+      }
+    },
+    "A legacy uploader may still be writing, or an uploaded archive may not be imported yet. A complete archive trailer or an applied marker alone does not prove it is a disposable copy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A legacy uploader may still be writing, or an uploaded archive may not be imported yet. A complete archive trailer or an applied marker alone does not prove it is a disposable copy."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版上传器可能仍在写入；上传包可能尚未导入。仅有完整包尾或已应用标记，不能证明它是可删除的副本。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版上传器可能仍在写入；上传包可能尚未导入。仅有完整包尾或已应用标记，不能证明它是可删除的副本。"
+          }
+        }
+      }
+    },
+    "Abandon Upload and Delete Staged Batches": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abandon Upload and Delete Staged Batches"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "放弃上传并删除暂存"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "放弃上传并删除暂存"
+          }
+        }
+      }
+    },
+    "Allocated space (estimated)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allocated space (estimated)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已分配空间（估算）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已分配空间（估算）"
+          }
+        }
+      }
+    },
+    "Also delete saves and runtime data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also delete saves and runtime data"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时删除存档及运行数据"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时删除存档及运行数据"
+          }
+        }
+      }
+    },
+    "Another operation is modifying users. Please try again later.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another operation is modifying users. Please try again later."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另一项操作正在修改用户，请稍后重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另一项操作正在修改用户，请稍后重试。"
+          }
+        }
+      }
+    },
+    "App Data Total": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App Data Total"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用数据目录合计"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用数据目录合计"
+          }
+        }
+      }
+    },
+    "App cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App cache"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用缓存"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用缓存"
+          }
+        }
+      }
+    },
+    "App settings and data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App settings and data"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用设置与数据"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用设置与数据"
+          }
+        }
+      }
+    },
+    "Assign an independent input source for local multiplayer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assign an independent input source for local multiplayer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "多人本地同玩时独立分配输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "多人本地同玩时独立分配输入源"
+          }
+        }
+      }
+    },
+    "Assign the virtual controller or keyboard to 2P to play 2-player local co-op with a 1P physical controller": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assign the virtual controller or keyboard to 2P to play 2-player local co-op with a 1P physical controller"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可将虚拟手柄或键盘分配给 2P，与 1P 实体手柄双人同玩"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可将虚拟手柄或键盘分配给 2P，与 1P 实体手柄双人同玩"
+          }
+        }
+      }
+    },
+    "Calculating app data…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calculating app data…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在统计应用数据…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在统计应用数据…"
+          }
+        }
+      }
+    },
+    "Cannot safely verify the game directory. Links, multiple hard links, special files, or unreadable items block deletion. Deletion did not start.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot safely verify the game directory. Links, multiple hard links, special files, or unreadable items block deletion. Deletion did not start."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安全核实游戏目录。链接、多重硬链接、特殊文件或不可读内容会阻止删除。没有开始删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安全核实游戏目录。链接、多重硬链接、特殊文件或不可读内容会阻止删除。没有开始删除。"
+          }
+        }
+      }
+    },
+    "Cannot verify directory or file ownership; cleanup did not run. Links, unknown files, and multiple hard links are not deleted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot verify directory or file ownership; cleanup did not run. Links, unknown files, and multiple hard links are not deleted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认目录或文件归属，未进行清理。链接、未知文件和多重硬链接不会删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认目录或文件归属，未进行清理。链接、未知文件和多重硬链接不会删除。"
+          }
+        }
+      }
+    },
+    "Category Breakdown (Non-overlapping)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Category Breakdown (Non-overlapping)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分类明细（互不重复）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分类明细（互不重复）"
+          }
+        }
+      }
+    },
+    "Check again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新检查"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新检查"
+          }
+        }
+      }
+    },
+    "Checking game data status…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking game data status…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在检查游戏资源状态…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在检查游戏资源状态…"
+          }
+        }
+      }
+    },
+    "Cleanup Result": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cleanup Result"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理结果"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理结果"
+          }
+        }
+      }
+    },
+    "Confirm Abandon and Delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm Abandon and Delete"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认放弃并删除"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认放弃并删除"
+          }
+        }
+      }
+    },
+    "Confirm abandoning these upload batches and accept re-uploading if needed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm abandoning these upload batches and accept re-uploading if needed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认放弃这些上传分卷，接受需要重新上传的后果"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认放弃这些上传分卷，接受需要重新上传的后果"
+          }
+        }
+      }
+    },
+    "Confirm deleting game and keeping saves": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm deleting game and keeping saves"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认删除游戏，保留存档"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认删除游戏，保留存档"
+          }
+        }
+      }
+    },
+    "Confirm permanent deletion of game and saves": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm permanent deletion of game and saves"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认永久删除游戏及存档"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认永久删除游戏及存档"
+          }
+        }
+      }
+    },
+    "Confirmation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次确认"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次确认"
+          }
+        }
+      }
+    },
+    "Content changed or some items failed to delete, so deletion stopped; the game entry remains, please check again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Content changed or some items failed to delete, so deletion stopped; the game entry remains, please check again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内容发生变化或部分删除失败，已停止；游戏条目保留，请重新检查。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内容发生变化或部分删除失败，已停止；游戏条目保留，请重新检查。"
+          }
+        }
+      }
+    },
+    "Controller (Auto-match)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controller (Auto-match)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手柄（自动匹配）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手柄（自动匹配）"
+          }
+        }
+      }
+    },
+    "Could not finish reading the data directory. Please try again later. No files were deleted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not finish reading the data directory. Please try again later. No files were deleted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法完整读取数据目录，请稍后重试。没有删除任何文件。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法完整读取数据目录，请稍后重试。没有删除任何文件。"
+          }
+        }
+      }
+    },
+    "Could not read or write user profile data. Please reload the list and check the result.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read or write user profile data. Please reload the list and check the result."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读写用户资料，请重新读取列表后检查结果。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读写用户资料，请重新读取列表后检查结果。"
+          }
+        }
+      }
+    },
+    "Create New User": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create New User"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建新用户"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建新用户"
+          }
+        }
+      }
+    },
+    "Delete Game": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Game"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏"
+          }
+        }
+      }
+    },
+    "Delete Game and Keep Saves": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Game and Keep Saves"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏并保留存档"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏并保留存档"
+          }
+        }
+      }
+    },
+    "Delete Game and Saves…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Game and Saves…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏及存档…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏及存档…"
+          }
+        }
+      }
+    },
+    "Delete Game, Keep Saves…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Game, Keep Saves…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏，保留存档…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除游戏，保留存档…"
+          }
+        }
+      }
+    },
+    "Delete Selected Staged Uploads…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Selected Staged Uploads…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除这批上传暂存…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除这批上传暂存…"
+          }
+        }
+      }
+    },
+    "Deleted %@ files (%@).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted %@ files (%@)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删除 %@ 个文件，文件大小 %@。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删除 %@ 个文件，文件大小 %@。"
+          }
+        }
+      }
+    },
+    "Deleted %@ upload batches (%@). Formal games and saves were not deleted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted %@ upload batches (%@). Formal games and saves were not deleted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删除 %@ 个上传分卷（文件大小 %@）。正式游戏和存档未删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删除 %@ 个上传分卷（文件大小 %@）。正式游戏和存档未删除。"
+          }
+        }
+      }
+    },
+    "Deletes this game's data pack, unfinished uploads, game settings, and other per-game files in this app, and removes it from the library. Does not uninstall the app or delete other games.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deletes this game's data pack, unfinished uploads, game settings, and other per-game files in this app, and removes it from the library. Does not uninstall the app or delete other games."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除此游戏在本 App 中的资源包、未完成上传、游戏设置和其他按游戏存放的文件，并从主页移除。不会卸载 App，也不会删除其他游戏。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除此游戏在本 App 中的资源包、未完成上传、游戏设置和其他按游戏存放的文件，并从主页移除。不会卸载 App，也不会删除其他游戏。"
+          }
+        }
+      }
+    },
+    "Deleting confirmed game data…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleting confirmed game data…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在删除已确认的游戏数据…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在删除已确认的游戏数据…"
+          }
+        }
+      }
+    },
+    "Deleting confirmed staged uploads…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleting confirmed staged uploads…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在删除已确认的上传暂存…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在删除已确认的上传暂存…"
+          }
+        }
+      }
+    },
+    "Deletion Scope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deletion Scope"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除范围"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除范围"
+          }
+        }
+      }
+    },
+    "Disabled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disabled"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已禁用"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已禁用"
+          }
+        }
+      }
+    },
+    "Does not touch old copies in Trash, external folders, or legacy shared directories; built-in game modules cannot be uninstalled separately.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Does not touch old copies in Trash, external folders, or legacy shared directories; built-in game modules cannot be uninstalled separately."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不处理回收站旧副本、外部文件夹或旧版共享目录；App 内置的游戏模块不能单独卸载。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不处理回收站旧副本、外部文件夹或旧版共享目录；App 内置的游戏模块不能单独卸载。"
+          }
+        }
+      }
+    },
+    "Excludes the app bundle itself. APFS shared blocks, system purgeable space, and directory metadata affect the system's reported value; uploads or writes during scanning also change the result.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Excludes the app bundle itself. APFS shared blocks, system purgeable space, and directory metadata affect the system's reported value; uploads or writes during scanning also change the result."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不含 App 本体。APFS 共享块、系统可回收空间及目录元数据会影响系统显示值；扫描期间上传或写入也会改变结果。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不含 App 本体。APFS 共享块、系统可回收空间及目录元数据会影响系统显示值；扫描期间上传或写入也会改变结果。"
+          }
+        }
+      }
+    },
+    "File size does not equal actual space reclaimed by the system. Links or unreadable files block deletion, and changes after confirmation stop the process; completed deletions cannot be undone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File size does not equal actual space reclaimed by the system. Links or unreadable files block deletion, and changes after confirmation stop the process; completed deletions cannot be undone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件大小不等于系统实际回收空间。遇到链接或不可读文件会阻止删除，确认后内容变化会停止；已完成的部分不能撤销。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件大小不等于系统实际回收空间。遇到链接或不可读文件会阻止删除，确认后内容变化会停止；已完成的部分不能撤销。"
+          }
+        }
+      }
+    },
+    "Files to delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files to delete"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待删除文件大小"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待删除文件大小"
+          }
+        }
+      }
+    },
+    "Game data and staged uploads will be deleted; S2A saves and runtime data will be kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Game data and staged uploads will be deleted; S2A saves and runtime data will be kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏资源和上传暂存将删除；S2A 存档及运行数据保留。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏资源和上传暂存将删除；S2A 存档及运行数据保留。"
+          }
+        }
+      }
+    },
+    "Game directory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Game directory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏目录"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏目录"
+          }
+        }
+      }
+    },
+    "Invalid user ID or name. Names cannot have leading or trailing spaces or control characters, and cannot exceed 32 UTF-8 bytes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid user ID or name. Names cannot have leading or trailing spaces or control characters, and cannot exceed 32 UTF-8 bytes."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户编号或名称无效。名称不能含首尾空格、控制字符，UTF-8 长度不能超过32字节。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户编号或名称无效。名称不能含首尾空格、控制字符，UTF-8 长度不能超过32字节。"
+          }
+        }
+      }
+    },
+    "Keeps this game's entire S2A runtime data folder (including saves, save backups, and caches) so you can continue using them after reinstalling the game.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keeps this game's entire S2A runtime data folder (including saves, save backups, and caches) so you can continue using them after reinstalling the game."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留此游戏整个 S2A 运行数据目录（含存档、存档备份及缓存），重新传入游戏后可继续使用。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留此游戏整个 S2A 运行数据目录（含存档、存档备份及缓存），重新传入游戏后可继续使用。"
+          }
+        }
+      }
+    },
+    "Keyboard": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "键盘"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "键盘"
+          }
+        }
+      }
+    },
+    "Legacy single-game directory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legacy single-game directory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版单游戏目录"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版单游戏目录"
+          }
+        }
+      }
+    },
+    "Legacy transfers cannot be force-stopped by this app: stop the transfer on your computer first and unplug the cable, or disconnect wireless transfer if used. Merely seeing file sizes stop growing does not prove writing has stopped.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legacy transfers cannot be force-stopped by this app: stop the transfer on your computer first and unplug the cable, or disconnect wireless transfer if used. Merely seeing file sizes stop growing does not prove writing has stopped."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版传输不能被此 App 强制终止：先停止电脑上的传输，拔掉连接线；如果使用无线传输，请断开该无线连接。仅观察文件不再增长不能证明写入已经停止。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旧版传输不能被此 App 强制终止：先停止电脑上的传输，拔掉连接线；如果使用无线传输，请断开该无线连接。仅观察文件不再增长不能证明写入已经停止。"
+          }
+        }
+      }
+    },
+    "Name (up to 32 UTF-8 bytes)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name (up to 32 UTF-8 bytes)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名称（UTF-8 最多32字节）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名称（UTF-8 最多32字节）"
+          }
+        }
+      }
+    },
+    "Name changes take effect on the next game launch and do not alter active sessions. New users use independent saves without copying existing progress.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name changes take effect on the next game launch and do not alter active sessions. New users use independent saves without copying existing progress."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名称在下一次启动游戏时生效；不会改动已经开始的会话。新用户使用独立存档，不自动复制原有进度。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名称在下一次启动游戏时生效；不会改动已经开始的会话。新用户使用独立存档，不自动复制原有进度。"
+          }
+        }
+      }
+    },
+    "No files are deleted automatically. Formal games and saves are always kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No files are deleted automatically. Formal games and saves are always kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不会自动删除任何文件。正式游戏和存档始终保留。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不会自动删除任何文件。正式游戏和存档始终保留。"
+          }
+        }
+      }
+    },
+    "No staged uploads matching the explicit batch rules were found; unknown files, links, and other temporary files are kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No staged uploads matching the explicit batch rules were found; unknown files, links, and other temporary files are kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未发现可按明确分卷规则处理的暂存；未知文件、链接、其他临时文件均保留。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未发现可按明确分卷规则处理的暂存；未知文件、链接、其他临时文件均保留。"
+          }
+        }
+      }
+    },
+    "Not Completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Completed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未完成"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未完成"
+          }
+        }
+      }
+    },
+    "Not selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未选择"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未选择"
+          }
+        }
+      }
+    },
+    "OK": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "好"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "好"
+          }
+        }
+      }
+    },
+    "Other app data · Kept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other app data · Kept"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他应用数据 · 保留"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他应用数据 · 保留"
+          }
+        }
+      }
+    },
+    "Other documents · Kept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other documents · Kept"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他文档 · 保留"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他文档 · 保留"
+          }
+        }
+      }
+    },
+    "Permanently Delete Game and Saves": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanently Delete Game and Saves"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "永久删除游戏和存档"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "永久删除游戏和存档"
+          }
+        }
+      }
+    },
+    "Permanently delete the selected upload batches?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanently delete the selected upload batches?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "永久删除所选上传分卷？"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "永久删除所选上传分卷？"
+          }
+        }
+      }
+    },
+    "Permanently deletes saves, caches, save backups, and recovery records inside this game's S2A folder. Cannot be undone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanently deletes saves, caches, save backups, and recovery records inside this game's S2A folder. Cannot be undone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将永久删除此游戏 S2A 目录内的存档、缓存、存档备份和恢复记录。不能撤销。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将永久删除此游戏 S2A 目录内的存档、缓存、存档备份和恢复记录。不能撤销。"
+          }
+        }
+      }
+    },
+    "Please stop the computer transfer and disconnect the transfer connection before confirming upload abandonment.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please stop the computer transfer and disconnect the transfer connection before confirming upload abandonment."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止电脑传输并断开传输连接，再确认放弃上传。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止电脑传输并断开传输连接，再确认放弃上传。"
+          }
+        }
+      }
+    },
+    "Please stop the computer transfer first and unplug the cable or disconnect wireless transfer. The app cannot force-stop legacy uploaders.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please stop the computer transfer first and unplug the cable or disconnect wireless transfer. The app cannot force-stop legacy uploaders."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止电脑传输，拔掉连接线或断开无线传输。App 无法强制终止旧上传器。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止电脑传输，拔掉连接线或断开无线传输。App 无法强制终止旧上传器。"
+          }
+        }
+      }
+    },
+    "Please stop the transfer and disconnect the computer or wireless transfer connection first.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please stop the transfer and disconnect the computer or wireless transfer connection first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止传输并断开电脑/无线传输连接。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止传输并断开电脑/无线传输连接。"
+          }
+        }
+      }
+    },
+    "Preserved runtime data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preserved runtime data"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留运行数据"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留运行数据"
+          }
+        }
+      }
+    },
+    "Refresh": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刷新"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刷新"
+          }
+        }
+      }
+    },
+    "Reload": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新读取"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新读取"
+          }
+        }
+      }
+    },
+    "Rename Selected User": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename Selected User"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修改所选用户名称"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修改所选用户名称"
+          }
+        }
+      }
+    },
+    "Result": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Result"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "结果"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "结果"
+          }
+        }
+      }
+    },
+    "Saves": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档"
+          }
+        }
+      }
+    },
+    "Saves and S2A runtime data have been kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves and S2A runtime data have been kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档及 S2A 运行数据已保留。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档及 S2A 运行数据已保留。"
+          }
+        }
+      }
+    },
+    "Saves will also be permanently deleted and cannot be undone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves will also be permanently deleted and cannot be undone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档也会永久删除，无法撤销。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存档也会永久删除，无法撤销。"
+          }
+        }
+      }
+    },
+    "Selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选中"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选中"
+          }
+        }
+      }
+    },
+    "Selected Game": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected Game"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选游戏"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选游戏"
+          }
+        }
+      }
+    },
+    "Selected: %@ · %@ · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected: %@ · %@ · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选择：%@ · %@ · %@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选择：%@ · %@ · %@"
+          }
+        }
+      }
+    },
+    "Shared Local Users": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared Local Users"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机共享用户"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机共享用户"
+          }
+        }
+      }
+    },
+    "Some directories could not be counted or contained links: the total may be incomplete. Upload batches below are verified independently and do not rely on this summary.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some directories could not be counted or contained links: the total may be incomplete. Upload batches below are verified independently and do not rely on this summary."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分目录未能统计或存在链接：总量可能不完整。下方上传分卷会独立检查，不以此统计结果决定是否可删。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分目录未能统计或存在链接：总量可能不完整。下方上传分卷会独立检查，不以此统计结果决定是否可删。"
+          }
+        }
+      }
+    },
+    "Some files changed or could not be deleted, so cleanup stopped; please check again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some files changed or could not be deleted, so cleanup stopped; please check again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分文件发生变化或无法删除，已停止，请重新检查。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分文件发生变化或无法删除，已停止，请重新检查。"
+          }
+        }
+      }
+    },
+    "Staged content changed after confirmation, so cleanup stopped. Please stop the transfer, disconnect, and check again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Staged content changed after confirmation, so cleanup stopped. Please stop the transfer, disconnect, and check again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂存内容在确认后发生变化，已停止清理。请停止传输、断开连接并重新检查。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂存内容在确认后发生变化，已停止清理。请停止传输、断开连接并重新检查。"
+          }
+        }
+      }
+    },
+    "Staged upload · Unconfirmed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Staged upload · Unconfirmed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上传暂存 · 未确认可删"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上传暂存 · 未确认可删"
+          }
+        }
+      }
+    },
+    "Storage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Almacenamiento"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stockage"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ストレージ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储空间"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "儲存空間"
+          }
+        }
+      }
+    },
+    "Supports physical controllers, virtual controller, and keyboard independently": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supports physical controllers, virtual controller, and keyboard independently"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "支持实体手柄、虚拟手柄、键盘三种独立输入源"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "支持实体手柄、虚拟手柄、键盘三种独立输入源"
+          }
+        }
+      }
+    },
+    "Switch 2 Pro (BLE)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch 2 Pro (BLE)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch 2 Pro（BLE）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch 2 Pro（BLE）"
+          }
+        }
+      }
+    },
+    "System controller (Bluetooth / MFi)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System controller (Bluetooth / MFi)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统手柄（蓝牙 / MFi）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统手柄（蓝牙 / MFi）"
+          }
+        }
+      }
+    },
+    "System temporary directory · Needs review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System temporary directory · Needs review"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统临时目录 · 待核实"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统临时目录 · 待核实"
+          }
+        }
+      }
+    },
+    "The game and its S2A save data have been deleted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The game and its S2A save data have been deleted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏及其 S2A 存档数据已删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏及其 S2A 存档数据已删除。"
+          }
+        }
+      }
+    },
+    "The game didn’t start": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The game didn’t start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏没有启动"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏没有启动"
+          }
+        }
+      }
+    },
+    "The game directory changed after preview. Please stop the transfer and check again. Deletion did not start.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The game directory changed after preview. Please stop the transfer and check again. Deletion did not start."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏目录在预览后发生变化，请停止传输并重新检查。没有开始删除。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "游戏目录在预览后发生变化，请停止传输并重新检查。没有开始删除。"
+          }
+        }
+      }
+    },
+    "The maximum number of users has been reached.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The maximum number of users has been reached."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户数量已达到上限。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户数量已达到上限。"
+          }
+        }
+      }
+    },
+    "The selected user does not exist. Please select again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected user does not exist. Please select again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选用户不存在，请重新选择。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选用户不存在，请重新选择。"
+          }
+        }
+      }
+    },
+    "The user account for this session was not accepted by the host, so the game did not start; it will not switch to the default account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The user account for this session was not accepted by the host, so the game did not start; it will not switch to the default account."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本局用户账号未被宿主接受，游戏没有启动；不会改用默认账号。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本局用户账号未被宿主接受，游戏没有启动；不会改用默认账号。"
+          }
+        }
+      }
+    },
+    "The user list changed. Please refresh and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The user list changed. Please refresh and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户列表已变化，请刷新后重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户列表已变化，请刷新后重试。"
+          }
+        }
+      }
+    },
+    "The user profile directory or file contains links or an unexpected file type; operation stopped.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The user profile directory or file contains links or an unexpected file type; operation stopped."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户资料目录或文件包含链接或类型异常，已停止操作。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户资料目录或文件包含链接或类型异常，已停止操作。"
+          }
+        }
+      }
+    },
+    "This runtime host has not confirmed support for iOS user accounts and isolated data paths. Please update the host before launching; it will not fall back to a shared account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This runtime host has not confirmed support for iOS user accounts and isolated data paths. Please update the host before launching; it will not fall back to a shared account."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此运行宿主未确认支持 iOS 用户账号与独立数据路径，请更新宿主后再启动；不会退回共用账号。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此运行宿主未确认支持 iOS 用户账号与独立数据路径，请更新宿主后再启动；不会退回共用账号。"
+          }
+        }
+      }
+    },
+    "Total file size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total file size"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件总大小"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件总大小"
+          }
+        }
+      }
+    },
+    "Transfer stopped and computer or wireless connection disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer stopped and computer or wireless connection disconnected"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止传输并断开电脑/无线传输连接"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止传输并断开电脑/无线传输连接"
+          }
+        }
+      }
+    },
+    "Transfer stopped and disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer stopped and disconnected"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止并断开传输连接"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止并断开传输连接"
+          }
+        }
+      }
+    },
+    "Trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回收站"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回收站"
+          }
+        }
+      }
+    },
+    "Trash · Needs review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash · Needs review"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回收站 · 待核实"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回收站 · 待核实"
+          }
+        }
+      }
+    },
+    "User %@ · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User %@ · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户 %@ · %@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户 %@ · %@"
+          }
+        }
+      }
+    },
+    "User IDs are not game account UIDs. User 01 keeps each game's original account and saves; renaming does not change the UID.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User IDs are not game account UIDs. User 01 keeps each game's original account and saves; renaming does not change the UID."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户编号不是游戏账号 UID。用户01保留每款游戏原有账号和存档；改名不会更换 UID。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户编号不是游戏账号 UID。用户01保留每款游戏原有账号和存档；改名不会更换 UID。"
+          }
+        }
+      }
+    },
+    "User Management": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User Management"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户管理"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户管理"
+          }
+        }
+      }
+    },
+    "User Name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User Name"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名称"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名称"
+          }
+        }
+      }
+    },
+    "User profile data is corrupted or has an unsupported version; operation stopped without resetting users or saves.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User profile data is corrupted or has an unsupported version; operation stopped without resetting users or saves."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户资料损坏或版本不支持，已停止操作；没有重置用户或存档。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户资料损坏或版本不支持，已停止操作；没有重置用户或存档。"
+          }
+        }
+      }
+    },
+    "Verifying deletion scope…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying deletion scope…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在核实删除范围…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在核实删除范围…"
+          }
+        }
+      }
+    },
+    "You do not need to keep the original game on your computer. This only deletes the explicitly selected upload batches, never unpacked games, saves, or the entire Trash. Batches may be the only uploaded copy; deleting them is not deduplication and may require uploading again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not need to keep the original game on your computer. This only deletes the explicitly selected upload batches, never unpacked games, saves, or the entire Trash. Batches may be the only uploaded copy; deleting them is not deduplication and may require uploading again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不需要电脑保留原游戏。这里只删除明确选择的上传分卷，不删除已解包游戏、存档或整个回收站。分卷可能是唯一已传副本；删除不是去重，可能需要重新上传。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不需要电脑保留原游戏。这里只删除明确选择的上传分卷，不删除已解包游戏、存档或整个回收站。分卷可能是唯一已传副本；删除不是去重，可能需要重新上传。"
+          }
+        }
+      }
+    },
+    "Manage…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gestionar…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gérer…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理…"
+          }
+        }
+      }
+    },
+    "View space used by games, saves, and caches on this device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View space used by games, saves, and caches on this device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consulta el espacio que usan los juegos, las partidas guardadas y la caché en este dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consultez l’espace utilisé par les jeux, les sauvegardes et les caches sur cet appareil."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスのゲーム、セーブデータ、キャッシュが使用している容量を確認します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看这台设备上游戏、存档与缓存占用的空间，或清理未完成的传输。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看這台裝置上遊戲、存檔與快取佔用的空間，或清理未完成的傳輸。"
+          }
+        }
+      }
+    },
+    "Go back to the saved moment": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go back to the saved moment"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volver al momento guardado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revenir à l’instant sauvegardé"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存した瞬間に戻る"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回到上次存下的这一刻"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回到上次存下的這一刻"
+          }
+        }
+      }
+    },
+    "The iCloud save is from a different version, belongs to another account, or has damaged files, so it didn’t overwrite your progress on this device. To use it, restore it manually in save management.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The iCloud save is from a different version, belongs to another account, or has damaged files, so it didn’t overwrite your progress on this device. To use it, restore it manually in save management."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La partida de iCloud es de otra versión, pertenece a otra cuenta o tiene archivos dañados, así que no sobrescribió tu progreso en este dispositivo. Para usarla, restáurala manualmente en la gestión de partidas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sauvegarde iCloud provient d'une autre version, appartient à un autre compte ou contient des fichiers endommagés ; elle n'a donc pas remplacé votre progression sur cet appareil. Pour l'utiliser, restaurez-la manuellement dans la gestion des sauvegardes."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud のセーブデータはバージョンが異なるか、別のアカウントのものか、破損したファイルを含むため、このデバイスの進行状況は上書きしませんでした。使う場合はセーブデータ管理から手動で復元してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "云端有一份和本机不同版本、属于另一个账号或有文件损坏的存档，没有自动覆盖你本机的进度；要用它可以在存档管理里手动恢复。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雲端有一份和本機不同版本、屬於另一個帳號或有檔案損壞的存檔，沒有自動覆蓋你本機的進度；要用它可以在存檔管理裡手動恢復。"
           }
         }
       }

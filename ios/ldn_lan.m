@@ -5,7 +5,7 @@
 //   不分先后、不需要谁先建房：每台看到的候选集合相同，选出的就是同一台。
 // 何时起：游戏第一次初始化 ldn:u 时由 C#（Host.OnLdnInitializing）调已登记的 provider——只有用联机的游戏才碰网络、才弹「本地网络」授权（Info.plist 说明文字）；
 //   S2A_LDN_SERVER=lan 时共享服务起局就调（开发 / 调试）。没有设置开关：不想联机就不进联机菜单、或在系统的「本地网络」权限里拒绝。
-// 弱链接[host,ios]：S2A_LdnSetServer（C# 服务层 LdnRelay.cs 提供；链接行按这行放行未定义，runtime/build.mk 自动收）
+// 弱链接[host,ios,nvntest]：S2A_LdnSetServer（C# 服务层 LdnRelay.cs 提供；链接行按这行放行未定义，runtime/build.mk 自动收）
 #import <Foundation/Foundation.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>

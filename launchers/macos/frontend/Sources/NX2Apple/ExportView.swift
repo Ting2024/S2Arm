@@ -9,6 +9,166 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
+struct ExportQueueListSection: View {
+    @ObservedObject var model: S2ArmLauncherModel
+    @EnvironmentObject var loc: Localizer
+    @State private var draggedQueueID: UUID?
+
+    private var zh: Bool { loc.lang == .zh }
+
+    private func platformLabel(_ platforms: [ExportPlatform]) -> String {
+        platforms.map { loc.t("s2arm.export.platform." + $0.rawValue) }.joined(separator: " + ")
+    }
+
+    var body: some View {
+        if model.busy || !model.exportQueue.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(zh ? "出包队列" : "Export Queue")
+                        .font(.manrope(15, .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if !model.exportQueue.isEmpty {
+                        Text(zh ? "拖拽可调整排队顺序（进行中任务固定在首位）" : "Drag to reorder queued items (active task stays first)")
+                            .font(.manrope(12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                VStack(spacing: 8) {
+                    if model.busy, let session = model.session, let run = session.export {
+                        HStack(spacing: 12) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20)
+                            Text("1")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.name)
+                                    .font(.manrope(13.5, .bold))
+                                    .lineLimit(1)
+                                Text(platformLabel(run.platforms))
+                                    .font(.manrope(12))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(zh ? "进行中 · 不可插队" : "In Progress · Locked")
+                                .font(.manrope(11.5, .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(LauncherPalette.building.opacity(0.14), in: Capsule())
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(LauncherPalette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(LauncherPalette.building.opacity(0.45), lineWidth: 1))
+                    }
+
+                    ForEach(Array(model.exportQueue.enumerated()), id: \.element.id) { index, item in
+                        let displayIndex = (model.busy && model.session?.export != nil) ? index + 2 : index + 1
+                        HStack(spacing: 12) {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("\(displayIndex)")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.game.name)
+                                    .font(.manrope(13.5, .semibold))
+                                    .lineLimit(1)
+                                Text(platformLabel(item.platforms))
+                                    .font(.manrope(12))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Button {
+                                    model.moveQueuedExport(fromIndex: index, toIndex: index - 1)
+                                } label: {
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == 0)
+                                .opacity(index == 0 ? 0.3 : 1)
+                                .help(zh ? "上移" : "Move Up")
+
+                                Button {
+                                    model.moveQueuedExport(fromIndex: index, toIndex: index + 1)
+                                } label: {
+                                    Image(systemName: "arrow.down")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == model.exportQueue.count - 1)
+                                .opacity(index == model.exportQueue.count - 1 ? 0.3 : 1)
+                                .help(zh ? "下移" : "Move Down")
+
+                                Button {
+                                    model.removeQueuedExport(id: item.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(zh ? "移出队列" : "Remove from Queue")
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(LauncherPalette.surface.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                        .onDrag {
+                            draggedQueueID = item.id
+                            return NSItemProvider(object: item.id.uuidString as NSString)
+                        }
+                        .onDrop(of: [UTType.text], delegate: ExportQueueDropDelegate(
+                            targetID: item.id,
+                            draggedID: $draggedQueueID,
+                            model: model
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ExportQueueDropDelegate: DropDelegate {
+    let targetID: UUID
+    @Binding var draggedID: UUID?
+    let model: S2ArmLauncherModel
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID, draggedID != targetID else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            model.moveQueuedExport(draggedID: draggedID, targetID: targetID)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedID = nil
+        return true
+    }
+}
+
 struct ExportView: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
@@ -30,6 +190,7 @@ struct ExportView: View {
                 downstream
                 platformsSection
                 optionsSection
+                ExportQueueListSection(model: model)
             }
         } actions: {
             actionBar
@@ -190,6 +351,8 @@ struct ExportView: View {
     private func tile(_ platform: ExportPlatform) -> some View {
         let on = model.exportTargets.contains(platform)
         let open = platform.released
+        let runningThis = model.isExportPlatformActive(gameID: game.id, platform: platform)
+        let queuedThis = model.isExportPlatformQueued(gameID: game.id, platform: platform)
         let hovered = open && hoveredPlatform == platform
         return Button { model.toggleExport(platform) } label: {
             VStack(alignment: .leading, spacing: 14) {
@@ -210,7 +373,22 @@ struct ExportView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(platform.title(loc)).font(.manrope(16, .semibold))
+                    HStack(spacing: 6) {
+                        Text(platform.title(loc)).font(.manrope(16, .semibold))
+                        if runningThis {
+                            Text(loc.lang == .zh ? "出包中" : "Running")
+                                .font(.manrope(10.5, .bold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(LauncherPalette.building.opacity(0.15), in: Capsule())
+                        } else if queuedThis {
+                            Text(loc.lang == .zh ? "已在队列" : "Queued")
+                                .font(.manrope(10.5, .bold))
+                                .foregroundStyle(LauncherPalette.cream)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(LauncherPalette.cream.opacity(0.15), in: Capsule())
+                        }
+                    }
                     Text(note(platform)).font(.manrope(12.5)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -224,7 +402,7 @@ struct ExportView: View {
         }
         .controllerButtonStyle(.plain)
         .controllerID("export.platform." + platform.rawValue)
-        .disabled(!open || model.mainBusy)
+        .disabled(!open)
         .busyHint(model, disabled: open)
         .onHover { hoveredPlatform = $0 ? platform : (hoveredPlatform == platform ? nil : hoveredPlatform) }
         .accessibilityLabel(platform.title(loc))

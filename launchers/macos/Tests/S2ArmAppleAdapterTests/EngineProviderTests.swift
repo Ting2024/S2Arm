@@ -202,7 +202,7 @@ final class EngineProviderSettingsAndRunTests: XCTestCase {
         let running = try provider.run(InstalledGame(gameId: "0100A", name: "Alpha"),
                                        settings: Settings(values: ["gameLanguage": "ja", "docked": "1", "widescreen": "0"], uiLanguage: "en"),
                                        events: sink)
-        XCTAssertThrowsError(try provider.run(InstalledGame(gameId: "0100B", name: "Beta"), settings: Settings(), events: .discard))
+        XCTAssertThrowsError(try provider.run(InstalledGame(gameId: "0100A", name: "Alpha"), settings: Settings(), events: .discard))
         let req = try XCTUnwrap(runner.starts.first?.request)
         XCTAssertEqual(runner.starts.count, 1)
         XCTAssertEqual(req["operation"] as? String, "launch")
@@ -213,7 +213,7 @@ final class EngineProviderSettingsAndRunTests: XCTestCase {
         XCTAssertEqual(req["uiLanguage"] as? String, "en")
         XCTAssertNil(req["widescreen"])
         testQueue.sync {}
-        provider.control(RunningGame(gameId: "0100A", taskId: "not-this-one"), .stop)
+        provider.control(RunningGame(userId: "01", gameId: "0100A", taskId: "not-this-one"), .stop)
         XCTAssertEqual(runner.handles[0].terminated, 0)
         provider.control(running, .stop)
         await fulfillment(of: [finished], timeout: 5)

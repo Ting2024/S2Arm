@@ -55,6 +55,7 @@ static UIButton *button(SEL action, BOOL primary) {
 }
 // 游戏画面建好后调（app.m 场景代理，提示页不调）
 void s2a_dprompt_attach(UIView *root) {
+    if (g_banner) [g_banner removeFromSuperview];
     g_banner = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:S2A_BLUR_MATERIAL_DARK]];
     g_banner.layer.cornerRadius = 16; g_banner.clipsToBounds = YES; g_banner.hidden = YES; g_banner.translatesAutoresizingMaskIntoConstraints = NO;
     g_title = [UILabel new]; g_title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; g_title.textColor = UIColor.whiteColor;
@@ -70,6 +71,9 @@ void s2a_dprompt_attach(UIView *root) {
         [row.topAnchor constraintEqualToAnchor:g_banner.contentView.topAnchor constant:12], [row.bottomAnchor constraintEqualToAnchor:g_banner.contentView.bottomAnchor constant:-12],
         [g_banner.topAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.topAnchor constant:12], [g_banner.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
         [g_banner.widthAnchor constraintLessThanOrEqualToAnchor:root.widthAnchor multiplier:0.55]]];
+    static int timer_started;
+    if (timer_started) return;
+    timer_started = 1;
     [NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(NSTimer *t) { (void)t; poll(); }];
     // 签名到期提示（prov_expiry.m）：描述文件剩不到 48 小时，起局 3 秒后提示一次；读不到描述文件不提示
     double h = s2a_prov_hours_left_self();

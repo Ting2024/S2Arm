@@ -234,6 +234,11 @@ if source.read_bytes() in (b"outdated fixture", b"ticket fixture"):
     print("Container metadata could not be decrypted or verified. Check keys, tickets and file integrity.")
     print(f"【原因 {code}】")
     raise SystemExit(3)
+if source.read_bytes() == b"hash mismatch fixture":
+    print("Container metadata could not be decrypted or verified. Check keys, tickets and file integrity.")
+    print("【原因 hash_mismatch】源文件数据哈希校验不过（ResultFsNonRealDataVerificationFailed (2002-4604): Hash error!）")
+    print("Authorization: Bearer synthetic-bearer")
+    raise SystemExit(3)
 if source.read_bytes() == b"damaged fixture":   # #1511 再判：解不开，但同代密钥的控制数据能解开 → 读取器归 content_damaged
     print("Container metadata could not be decrypted or verified. Check keys, tickets and file integrity.")
     print("【原因 content_damaged】解出来的数据对不上（分区头不是 PFS0 / HFS0）：同一份文件里控制数据（内容 0000abcd）用同一代密钥能正常解开")

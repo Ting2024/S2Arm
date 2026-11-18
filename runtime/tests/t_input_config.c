@@ -20,7 +20,74 @@ static void replace_bad(const char *from, const char *to, int rc, const char *wh
     memcpy(p, valid, left); memcpy(p + left, to, strlen(to)); strcpy(p + left + strlen(to), at + strlen(from));
     bad(p, n, rc, why); free(p);
 }
+static void player_tables(void) {
+    const char *all = "\"1\":{\"backend\":\"auto\",\"device\":\"\"},"
+                      "\"2\":{\"backend\":\"system\",\"device\":\"gc:two\"},"
+                      "\"3\":{\"backend\":\"nspro-hid\",\"device\":\"hid:three\"},"
+                      "\"4\":{\"backend\":\"disabled\",\"device\":\"\"}";
+    char document[4096];
+    snprintf(document, sizeof document, "%.*s,\"players\":{%s}}", (int)strlen(valid) - 1, valid, all);
+    s2a_input_config c;
+    CHECK(!s2a_input_config_parse(document, strlen(document), &c), "four player table");
+    CHECK(c.players_present && c.players[0].backend == 3 && !c.players[0].device[0], "1P auto driver and device");
+    CHECK(c.players[1].backend == 0 && !strcmp(c.players[1].device, "gc:two"), "2P system binding");
+    CHECK(c.players[2].backend == 1 && !strcmp(c.players[2].device, "hid:three"), "3P HID binding");
+    CHECK(c.players[3].backend == 2, "4P disabled");
+    const char *all_touch_kb = "\"1\":{\"backend\":\"touch\",\"device\":\"\"},"
+                               "\"2\":{\"backend\":\"keyboard\",\"device\":\"\"},"
+                               "\"3\":{\"backend\":\"system\",\"device\":\"gc:three\"},"
+                               "\"4\":{\"backend\":\"disabled\",\"device\":\"\"}";
+    snprintf(document, sizeof document, "%.*s,\"players\":{%s}}", (int)strlen(valid) - 1, valid, all_touch_kb);
+    CHECK(!s2a_input_config_parse(document, strlen(document), &c), "four player table with touch and keyboard");
+    CHECK(c.players_present && c.players[0].backend == 4 && c.players[1].backend == 5, "1P touch and 2P keyboard");
+    snprintf(document, sizeof document, "%.*s,\"controller\":{\"backend\":\"system\",\"device\":\"\"},\"players\":{%s}}", (int)strlen(valid) - 1, valid, all);
+    bad(document, strlen(document), S2A_INPUT_CONFIG_BINDING, "ambiguous legacy and player table");
+    const char *invalid[] = {"null", "[]", "{}", "{\"1\":null}", "{\"1\":{\"backend\":\"auto\",\"device\":\"\"}}"};
+    for (unsigned i = 0; i < sizeof invalid / sizeof *invalid; i++) {
+        snprintf(document, sizeof document, "%.*s,\"players\":%s}", (int)strlen(valid) - 1, valid, invalid[i]);
+        bad(document, strlen(document), S2A_INPUT_CONFIG_BINDING, "malformed player table never partially applies");
+    }
+    const char *invalid_slot[] = {
+        "null", "[]", "{}", "{\"backend\":\"unknown\",\"device\":\"\"}",
+        "{\"backend\":\"auto\",\"device\":1}",
+        "{\"backend\":\"auto\",\"device\":\"a\\u0000b\"}",
+        "{\"backend\":\"auto\",\"device\":\"\",\"extra\":true}"
+    };
+    for (unsigned i = 0; i < sizeof invalid_slot / sizeof *invalid_slot; i++) {
+        snprintf(document, sizeof document, "%.*s,\"players\":{"
+                 "\"1\":{\"backend\":\"auto\",\"device\":\"\"},"
+                 "\"2\":{\"backend\":\"auto\",\"device\":\"\"},"
+                 "\"3\":%s,\"4\":{\"backend\":\"auto\",\"device\":\"\"}}}",
+                 (int)strlen(valid) - 1, valid, invalid_slot[i]);
+        bad(document, strlen(document), S2A_INPUT_CONFIG_BINDING, "invalid slot rejected before publication");
+    }
+    for (int kind = 0; kind <= 5; kind++) {
+        snprintf(document, sizeof document, "%.*s,\"players\":{"
+                 "\"1\":{\"backend\":\"system\",\"device\":\"\"},"
+                 "\"2\":{\"backend\":\"%s\",\"device\":\"\",\"type\":%d},"
+                 "\"3\":{\"backend\":\"auto\",\"device\":\"\"},"
+                 "\"4\":{\"backend\":\"disabled\",\"device\":\"\"}}}",
+                 (int)strlen(valid)-1, valid, kind == 4 ? "nspro-hid" : "system", kind);
+        if (kind == 5) bad(document, strlen(document), S2A_INPUT_CONFIG_BINDING, "invalid native type");
+        else CHECK(!s2a_input_config_parse(document, strlen(document), &c), "native type retains backend ABI");
+    }
+    for (int slot = 1; slot <= 2; slot++) for (int source = 0; source <= 6; source++) {
+        snprintf(document, sizeof document, "%.*s,\"players\":{"
+                 "\"1\":{\"backend\":\"system\",\"device\":\"\",\"source\":%d},"
+                 "\"2\":{\"backend\":\"system\",\"device\":\"\",\"source\":%d},"
+                 "\"3\":{\"backend\":\"auto\",\"device\":\"\"},"
+                 "\"4\":{\"backend\":\"disabled\",\"device\":\"\"}}}",
+                 (int)strlen(valid)-1, valid, slot == 1 ? source : 0, slot == 2 ? source : 1);
+        if (source == 4 || source == 6 || (source == 3 && slot == 2))
+            bad(document, strlen(document), S2A_INPUT_CONFIG_BINDING, "invalid Mac player source");
+        else CHECK(!s2a_input_config_parse(document, strlen(document), &c), "native source retains sampler ABI");
+    }
+    s2a_input_config_default(&c);
+    CHECK(!c.players_present, "legacy default is not rewritten");
+    for (int i = 0; i < 4; i++) CHECK(c.players[i].backend == 3 && !c.players[i].device[0], "new slot defaults auto/auto");
+}
 int main(void) {
+    player_tables();
     s2a_input_config c;
     CHECK(s2a_input_config_parse(valid, strlen(valid), &c) == 0, "valid schema1 optional fields omitted");
     CHECK(c.keyboard[0].code == 14 && c.keyboard[0].modifiers == 0, "A is Mac code14 with no modifiers");

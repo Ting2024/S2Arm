@@ -15,6 +15,11 @@
 
 // 触屏虚拟手柄（vpad.m）：电视没有触屏，只用扩展手柄
 void s2a_vpad_attach(UIView *root) { (void)root; }
+void s2a_vpad_set_settings_open(BOOL open) { (void)open; }
+void s2a_vpad_read_slot_state(uint32_t *out_buttons, int32_t out_axes[4]) {
+    if (out_buttons) *out_buttons = 0;
+    if (out_axes) { out_axes[0] = 0; out_axes[1] = 0; out_axes[2] = 0; out_axes[3] = 0; }
+}
 
 // 游戏内设置页（app_settings.m）：电视上设置在电脑端改、随包带过去；诊断页里的「设置」入口不出
 @implementation S2ASettingsRuntime   // 宿主照常登记能力（app.m），电视上没有游戏内设置页来用它

@@ -23,6 +23,7 @@ void s2a_loadpage_attach(UIView *root); void s2a_loadpage_front(void);   // load
 static _Atomic double g_brightness = -1;   // 屏幕亮度：主线程建场景 / 心跳时更新，渲染侧（hle_nvn.c 每 300 帧那行）只读缓存，不在别的线程碰 UIKit
 void s2a_brightness_hold_log(void);   // 亮度保持（S2A_BRIGHTNESS）：心跳行带出整局实际亮度最小 / 最大值
 #include "native.h"
+#include "../runtime/src/dev_facilities.h"
 #include "s2a_pad.h"
 #include "s2a_boot.h"
 #include "s2a_launch_ctx.h"
@@ -61,6 +62,8 @@ static void display_focus_publish(BOOL active) {
     atomic_store(&display_focused, active);
 }
 static _Atomic int g_front_running;
+// The owning scene, not UIApplication notifications, owns the GPU resume gate.
+static BOOL g_scene_active, g_monitoring;
 static void s2a_ios_suspend(int on, const char *why);
 static void s2a_ios_suspend_enqueue(int on, const char *why);
 // 重启完成（runtime/src/session.c s2a_session_on_restart_done，启动时登记一次）：不管设置页 / 游戏 ExecuteProgram / 测试开关谁发起，
@@ -79,8 +82,22 @@ static void settings_restart_result(int result, const char *detail, void *contex
     NSString *error = result ? (detail && s2a_l10n_zh() ? [NSString stringWithUTF8String:detail] : S2AL(@"app.restart.failed")) : nil;
     dispatch_async(dispatch_get_main_queue(), ^{ completion(error); });
 }
-// 切换游戏（多款容器）：一个进程只跑一款，换游戏 = 照退出流程收尾（等存档写完）、结束进程，再点开 App 就是游戏库（willConnect 容器分支）。
-//   确认框同游戏内「存档管理」的退出确认（save_transfer.m s2a_ios_save_present）：先提醒在游戏里存档；收尾放后台队列，主线程不等
+@class S2ASceneDelegate;
+static __weak S2ASceneDelegate *g_active_scene_delegate;
+static UIView *g_root;
+int s2a_host_start_selected_game(void);   // runtime/src/host_main.c
+static _Atomic int g_switch_starting;
+static void *switch_game_thread(void *unused) {
+    (void)unused;
+    @autoreleasepool {
+        int rc = s2a_host_start_selected_game();
+        atomic_store(&g_switch_starting, 0);
+        if (rc == 0) restart_done(s2a_session_generation());
+    }
+    return NULL;
+}
+// 切换游戏（多款容器）：进程内停止当前宿主会话并回到游戏库（s2a_host_stop + returnToLibraryBlock）。
+//   确认框同游戏内「存档管理」的退出确认（save_transfer.m s2a_ios_save_present）：先提醒在游戏里存档；若会话不在运行则直接返回游戏库
 static void switch_game_present(UIViewController *presenter) {
     if (!presenter) return;
     presenter = s2a_top_presenter(presenter);
@@ -88,16 +105,46 @@ static void switch_game_present(UIViewController *presenter) {
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:S2APICK(S2A_DPROMPT_HOME_QUIT_DECLINE) style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:S2APICK(S2A_DPROMPT_SWITCH_GAME_ACCEPT) style:UIAlertActionStyleDestructive handler:^(UIAlertAction *item) {
-        (void)item; LOG("切换游戏：玩家确认，收尾退出，下次打开回到游戏库");
-        void s2a_host_shutdown(const char *why);
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ s2a_host_shutdown("切换游戏"); });
+        (void)item; LOG("切换游戏：玩家确认，进程内停止当前游戏并回到游戏库");
+        void (^finishClose)(void) = ^{
+            s2a_vpad_set_settings_open(NO);
+            void (^returnToLibraryBlock)(void) = [(id)g_active_scene_delegate valueForKey:@"returnToLibraryBlock"];
+            if (returnToLibraryBlock) returnToLibraryBlock();
+        };
+        void (^dismissAndReturn)(void) = ^{
+            UIViewController *rootVC = g_root.window.rootViewController;
+            if (rootVC.presentedViewController) [rootVC dismissViewControllerAnimated:NO completion:finishClose];
+            else finishClose();
+        };
+        void (^wrapped)(NSString *) = ^(NSString *error) {
+            if (!error) {
+                dismissAndReturn();
+            } else {
+                UIViewController *top = g_root.window.rootViewController ? s2a_top_presenter(g_root.window.rootViewController) : nil;
+                if (!top) return;
+                UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:S2APICK(S2A_DPROMPT_SWITCH_GAME_TITLE) message:error preferredStyle:UIAlertControllerStyleAlert];
+                [errAlert addAction:[UIAlertAction actionWithTitle:S2AL(@"common.ok") style:UIAlertActionStyleDefault handler:nil]];
+                [top presentViewController:errAlert animated:YES completion:nil];
+            }
+        };
+        void *context = (void *)CFBridgingRetain([wrapped copy]);
+        int result = s2a_host_stop(settings_restart_result, context);
+        if (!result) { s2a_controller_set_foreground(0); return; }
+        void (^rejected)(NSString *) = CFBridgingRelease(context);
+        if (result == -1) {
+            dismissAndReturn();
+            return;
+        }
+        NSString *error = result == -3 ? S2AL(@"app.restart.busy") : result == -2 ? S2AL(@"app.restart.unsupported") : S2AL(@"app.restart.noSession");
+        rejected(error);
     }]];
     [presenter presentViewController:alert animated:YES completion:nil];
 }
 static void settings_attach_runtime(void) {
     S2ASettingsRuntime *runtime = [S2ASettingsRuntime new];
     runtime.manageSaves = ^(UIViewController *presenter) { s2a_ios_save_present(presenter); };
-    if (s2a_launch_ctx_container()) runtime.switchGame = ^(UIViewController *presenter) { switch_game_present(presenter); };   // 单款包没有游戏库，不给
+    runtime.multiGameContainer = s2a_launch_ctx_container() != 0;   // 设置页「换一款游戏」一栏
+    if (runtime.multiGameContainer) runtime.switchGame = ^(UIViewController *presenter) { switch_game_present(presenter); };   // 单款包没有游戏库，不给
     runtime.canRestart = ^BOOL { return s2a_host_session_state() == S2A_SESSION_RUNNING; };
     runtime.restart = ^(void (^completion)(NSString *)) {
         void *context = (void *)CFBridgingRetain([completion copy]);
@@ -175,7 +222,6 @@ static void mem_split_start(void) {
     else LOG("内存跳变采样：每 %d ms 取一次实占，比上次打印涨 ≥ %d MB 就打一行「[内存跳变 …]」（S2A_MEM_SPLIT）", MEM_STEP_MS, MEM_STEP_MB);
     pthread_attr_destroy(&a);
 }
-static UIView *g_root;
 static _Atomic int g_render_failed;
 static _Atomic int g_gpu_stuck_page;   // GPU 卡住暂停页在屏上（s2a_ios_gpu_stuck）：回前台不解冻游戏线程，等玩家在页上选
 static _Atomic int g_gpu_stopped;   // GPU 挂死安全停页在屏上（s2a_ios_gpu_stopped 置位）：停帧看门的提示不盖掉它
@@ -245,7 +291,7 @@ static void s2a_ios_suspend(int on, const char *why) {
         s2a_clock_catchup();   // 游戏日历（#863）：后台那段（含锁屏睡眠）补进 Ryujinx 稳态时钟；计数器仍从冻结那一刻接着走（#495）
         if (atomic_exchange(&g_bg, 0)) {   // 从后台回来的第一次（回前台 / 获得焦点两条通知都会到这里）：打恢复时间线（ap_host.c）
             uint64_t t0 = atomic_load(&g_fg_note); if (!t0 || t0 > t_ds) t0 = t_ds;
-            s2a_resume_timeline(t0, t_ds, t1, t2, t3);
+            s2a_resume_timeline(t0, t0 < t_ds ? t_ds : t0, t1, t2, t3);
         }
         LOG("iOS 壳：%s → 恢复", why);
     }
@@ -623,6 +669,7 @@ void s2a_ios_qprompt(int kind, int secs) {   // 文案 维护者 11-02 定：「
 // 保持亮屏按原因记（#1199）：1 = 游戏库后台解开资源包，2 = 游戏画面在前台。任一原因在就不自动锁屏，都没了才交还系统。
 //   原先只有解包一个原因、开关直接写，玩的时候没人开（过场 / 接外接屏时 iPhone 照样自动锁）；两个原因各管各的，解包结束不会把游戏中的亮屏关掉。
 //   App 退到后台时系统本来就不因它亮着；切回游戏它还在、接着生效。主机和原生手游的做法，不另设开关
+static _Atomic int g_in_game_view;
 static int g_awake_mask;
 static void s2a_ios_awake_set(int bit, int on) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -696,7 +743,9 @@ static void audio_category_apply(void) {
     return YES;
 }
 - (void)startMonitoring {
-    display_focus_publish(UIApplication.sharedApplication.applicationState == UIApplicationStateActive);
+    if (g_monitoring) return;
+    g_monitoring = YES;
+    display_focus_publish(g_scene_active);
     // iOS 27 场景生命周期（27.1 SDK 对链接新 SDK 的 App 强制 UIScene；没有场景代理 UIKit 会在
     // _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption 启动即崩）：窗口 / 根视图 / 虚拟手柄挪到
     // S2ASceneDelegate 的 scene:willConnectToSession 里建（见下）。这里只留 App 级的电量 / 前后台 / 心跳 / 热。
@@ -763,6 +812,9 @@ static void audio_category_apply(void) {
         int app_state = MIN((int)UIApplication.sharedApplication.applicationState, 2);
         static dispatch_queue_t hb_q; static dispatch_once_t hb_once; dispatch_once(&hb_once, ^{ hb_q = dispatch_queue_create("s2a.heartbeat", DISPATCH_QUEUE_SERIAL); });
         dispatch_async(hb_q, ^{
+        // 本款本机实测峰值（vawin.c s2a_guest_mem_note：进程实占 + 文件后备里已落块的客体字节）：下一局起局按它判文件后备开不开（11-07 卡顿线）
+        { void s2a_guest_mem_note(uint64_t footprint); s2a_guest_mem_note((uint64_t)s2a_footprint_mb() << 20); }
+        if (!s2a_dev_on() && !mem_split_on()) return;
         uint64_t lt, ll, fs, fh, wr = 0, wo = 0; int fn; s2a_low_holes(&lt, &ll); s2a_fd_usage(&fn, &fs, &fh);
         // 整窗 mincore（64 GB）只在内存分区诊断（S2A_MEM_SPLIT=1）开时扫（11-06 合入运维 / 性能线 A：Duo 热状态 2 下一次扫到心跳间隔超 30 秒，
         //   每 10 秒在后台吃秒级 CPU、分段持有进程地址映射锁，执行器还据此误判「出图停」）；缺省只报实占（phys_footprint，系统杀进程按它判），窗口常驻记「未扫」
@@ -771,8 +823,6 @@ static void audio_category_apply(void) {
         LOG("[心跳] 帧 %llu，热状态 %ld（0 正常 1 一般 2 严重 3 危急），进程实占 %llu MB，%s，持续执行档 %d（1 = 系统按稳态功率限制本进程，要权限 sustained-execution），低电量模式 %d，低区空洞合计 %llu MB、最大一块 %llu MB，文件句柄 %d / 软上限 %llu%s", (unsigned long long)s2a_ap_frames(), (long)NSProcessInfo.processInfo.thermalState,
             s2a_footprint_mb(), (const char *[]){"前台", "前台失焦", "后台"}[app_state],
             (int)[NSProcessInfo.processInfo hasPerformanceProfile:NSProcessPerformanceProfileSustained], (int)NSProcessInfo.processInfo.lowPowerModeEnabled, (unsigned long long)(lt >> 20), (unsigned long long)(ll >> 20), fn, (unsigned long long)fs, wins);
-        // 本款本机实测峰值（vawin.c s2a_guest_mem_note：只记没开文件后备那几局的进程实占，#783）：下一局起局按它判文件后备开不开
-        { void s2a_guest_mem_note(uint64_t footprint); s2a_guest_mem_note((uint64_t)s2a_footprint_mb() << 20); }
         int s2a_disk_io(uint64_t *rd, uint64_t *wr, uint64_t *pageins);   // energy.c（只此一处用，不进 native.h：那是出包抽取阶段的键）
         // 写盘量（11-05 能耗线，客体内存文件后备的代价）：本进程累计与近 10 秒，内存紧张时内核把文件脏页写回闪存的量在这里看
         { static uint64_t last, lr, lp; static int have; uint64_t w, r, p;
@@ -803,7 +853,7 @@ static void audio_category_apply(void) {
 }
 @end
 // iOS 27 场景生命周期代理：窗口在这里建并绑 windowScene。Info.plist 的 UIApplicationSceneManifest 指向本类。
-// 前后台仍走 app delegate 里注册的 NSNotification（场景式 / 旧式都发这几条），不另挪场景回调。
+// 场景激活/失活直接控制 GPU 闸门；不能依赖 UIApplication 通知恢复。
 @interface S2ASceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property BOOL managingSaves;
@@ -875,6 +925,7 @@ static void top_alert(UIWindow *w, NSString *title, NSString *body) {
 }
 @interface S2ASceneDelegate ()
 - (void)enterGame;
+- (void)returnToLibraryAfterStop;
 @end
 static void library_play_go(const char *gid, S2ASceneDelegate *sd);
 // 崩了能恢复（11-13 维护者改定：补丁 / 金手指是玩家主动开的，开局前不再问；崩了下次进来自动关掉、告诉玩家关了什么，想用去设置里再开）：
@@ -1343,6 +1394,29 @@ static void widget_open(NSURL *url, void *ctx) {
     (void)scene; widget_open(contexts.anyObject.URL, (__bridge void *)self);
 }
 // 多款容器：根控制器先是游戏库；壳没链库界面（缺省 make ios）时给提示页，不起游戏
+- (void (^)(void))returnToLibraryBlock {
+    __weak S2ASceneDelegate *weakSelf = self;
+    return ^{ [weakSelf returnToLibraryAfterStop]; };
+}
+- (void)returnToLibraryAfterStop {
+    atomic_store(&g_in_game_view, 0);
+    UIApplication.sharedApplication.idleTimerDisabled = NO;
+    s2a_guest_run_mark(0);
+    if (!self.cloudSyncing && !self.managingSaves && s2a_shell_cloud_upload_background) {
+        const s2a_launch_ctx *lc = s2a_launch_ctx_get();
+        if (lc && lc->game_id[0]) s2a_shell_cloud_upload_background(lc->game_id);
+    }
+    self.cloudSynced = NO;
+    atomic_store(&g_game_picked, 0);
+    s2a_launch_ctx_reset_selection();
+    g_msg = nil; g_note = nil; g_help_args = nil; g_help_recheck = NULL;
+    [g_note_view removeFromSuperview]; g_note_view = nil;
+    [g_help removeFromSuperview]; g_help = nil;
+    g_root = nil;
+    [self showLibrary];
+    if (s2a_shell_refresh) s2a_shell_refresh();
+    LOG("游戏库：已关闭当前游戏并返回游戏库");
+}
 - (void)showLibrary {
     if (!s2a_shell_library_vc || !s2a_shell_set_play_handler) {
         UIViewController *vc = [S2AGameVC new]; vc.view.backgroundColor = UIColor.blackColor; g_root = vc.view; self.window.rootViewController = vc;
@@ -1366,16 +1440,20 @@ static void widget_open(NSURL *url, void *ctx) {
 }
 // Play 选上之后：换成游戏界面（同单款 willConnect 建的那套：加载页、提示页、安全网提示），再走同一条起宿主路（存档管理 → startHost）
 - (void)enterGame {
+    atomic_store(&g_in_game_view, 1);
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     UIViewController *vc = [S2AGameVC new]; vc.view.backgroundColor = UIColor.blackColor; g_root = vc.view; g_note_view = nil;
     self.window.rootViewController = vc;
     { const char *e = getenv("S2A_PACK_APPLY_ONLY"); if (!g_msg && !(e && *e == '1')) s2a_loadpage_attach(vc.view); }
     note_build();
     if (g_help_args) help_build(g_help_args[0], g_help_args[1], g_help_args[2]);
     dguard_show_pending();
-    [self sceneDidBecomeActive:self.window.windowScene];
+    if (self.window.windowScene.activationState == UISceneActivationStateForegroundActive)
+        [self sceneDidBecomeActive:self.window.windowScene];
 }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
     (void)session;
+    g_active_scene_delegate = self;
 #if !TARGET_OS_TV   // 电视没有主屏快捷项
     if (options.shortcutItem) home_shortcut(options.shortcutItem.type, YES, nil);
 #endif
@@ -1420,6 +1498,8 @@ static void widget_open(NSURL *url, void *ctx) {
     if (!s2a_host_boot_pending()) [self prepareGameView];
 }
 - (void)prepareGameView {
+    atomic_store(&g_in_game_view, 1);
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     UIViewController *vc = self.window.rootViewController;
     // 浮层开关要赶在 s2a_hud_attach 与建 Metal 设备之前生效；host_run 里按同口径还会再兜底一次（#153）。
     s2a_ios_apply_overlay_settings(NSUserDefaults.standardUserDefaults);
@@ -1441,17 +1521,39 @@ static void widget_open(NSURL *url, void *ctx) {
 #endif
 // 游戏进行中切到后台：开了云存档、本机进度比云端新就上传（S2ArmShellHost 要后台收尾时间、只上传不下载；云端更新 / 冲突留给下次起局前同步）。
 //   宿主还没起（游戏库 / 起局前同步页 / 存档管理页）不传：那时存档没动过
+- (void)sceneWillResignActive:(UIScene *)scene {
+    if (scene != self.window.windowScene) return;
+    g_scene_active = NO;
+    UIApplication.sharedApplication.idleTimerDisabled = NO;
+    display_focus_publish(NO);
+}
 - (void)sceneDidEnterBackground:(UIScene *)scene {
-    (void)scene;
+    if (scene != self.window.windowScene) return;
+    [self sceneWillResignActive:scene];
     if (s2a_host_boot_pending() || self.cloudSyncing || self.managingSaves || !s2a_shell_cloud_upload_background) return;
     const s2a_launch_ctx *lc = s2a_launch_ctx_get();
     s2a_shell_cloud_upload_background(lc && lc->game_id[0] ? lc->game_id : "");
 }
+- (void)sceneWillEnterForeground:(UIScene *)scene {
+    if (scene != self.window.windowScene) return;
+    atomic_store(&g_fg_note, now_ns());
+}
 - (void)sceneDidBecomeActive:(UIScene *)scene {
-    (void)scene;
-    if (!s2a_host_boot_pending()) return;
+    if (scene != self.window.windowScene || scene.activationState != UISceneActivationStateForegroundActive) return;
+    g_active_scene_delegate = self;
+    g_scene_active = YES;
+    if (atomic_load(&g_in_game_view)) UIApplication.sharedApplication.idleTimerDisabled = YES;
+    display_focus_publish(YES);
+    if (g_monitoring && atomic_load(&g_in_game_view)) {
+        s2a_dguard_background(0, now_ns());
+        { void s2a_diag_session_fg(int); s2a_diag_session_fg(1); }
+        s2a_ios_suspend_enqueue(0, "场景激活／解锁");
+        s2a_guest_run_mark(1);
+    }
     if (s2a_launch_ctx_container() && !atomic_load(&g_game_picked)) return;   // 多款容器：等游戏库 Play（预热进程同样只显示库）
     if (self.managingSaves || self.cloudSyncing) return;
+    // 首次起局走 s2a_host_boot_pending()；返回游戏库后再选第二款走 s2a_host_session_state() == S2A_SESSION_STARTING
+    if (!s2a_host_boot_pending() && !(s2a_launch_ctx_container() && atomic_load(&g_game_picked) && s2a_host_session_state() == S2A_SESSION_STARTING)) return;
     // iCloud 存档同步（玩家在库设置里开了云存档才有页）：起宿主前、存档管理之前跑一次；有没做完的存档事务时先交存档管理页恢复，这次不同步
     if (!self.cloudSynced && s2a_shell_cloud_sync_vc && !s2a_ios_save_management_requested()) {
         self.cloudSynced = YES;
@@ -1482,8 +1584,31 @@ static void widget_open(NSURL *url, void *ctx) {
     [self startHost];
 }
 - (void)startHost {
+    // Save-manager completion can arrive after lock/background. Do not consume
+    // the one-shot continuation until the owning scene becomes active again.
+    if (!self.window.windowScene ||
+        self.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
+        self.managingSaves) return;
+    if (s2a_launch_ctx_container() && !atomic_load(&g_game_picked)) return;
     s2a_boot_entry entry = s2a_host_boot_take();
-    if (!entry) return;   // 先领取，再启动；后续激活只走现有恢复路径
+    if (!entry) {
+        if (s2a_launch_ctx_container() && atomic_load(&g_game_picked) && s2a_host_session_state() == S2A_SESSION_STARTING) {
+            if (atomic_exchange(&g_switch_starting, 1)) return;
+            int inputError = s2a_ios_input_config_load();
+            if (inputError) { atomic_store(&g_switch_starting, 0); LOG("【红】iOS 输入配置损坏，拒绝启动（%d: %s）", inputError, s2a_input_config_error_message(inputError)); return; }
+            s2a_log_session_start();
+            [self prepareGameView];
+            LOG("多款容器：从游戏库启动新选游戏");
+            pthread_t th; pthread_attr_t at; int rc = pthread_attr_init(&at);
+            if (rc) die("跨款宿主线程属性初始化失败（%d）", rc);
+            rc = pthread_attr_setstacksize(&at, 8 << 20);
+            if (rc) die("跨款宿主线程 8 MB 栈设置失败（%d）", rc);
+            rc = pthread_create(&th, &at, switch_game_thread, NULL); pthread_attr_destroy(&at);
+            if (rc) die("跨款宿主线程起不来（pthread_create=%d）", rc);
+            pthread_detach(th);
+        }
+        return;   // 先领取，再启动；后续激活只走现有恢复路径
+    }
     { void s2a_ios_test_save_op(void); s2a_ios_test_save_op(); }   // 测试开关 S2A_TEST_SAVE_OP（ios/save_transfer.m）：游戏已选定、宿主还没起，导出 / 导回一次存档
     int inputError = s2a_ios_input_config_load();
     if (inputError) {   // 11-17 维护者：校验不过不再拒启。默认键位照常起，横幅点名原因（这条只在开发 / 自动化起局设了 S2A_INPUT_CONFIG 时出现）

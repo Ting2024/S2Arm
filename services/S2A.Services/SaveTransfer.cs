@@ -245,6 +245,7 @@ public static partial class SaveTransfer
     {
         internal readonly JsonNode Request, Game;
         internal readonly string Root, Work, Transactions, Backups, Journal;
+        internal readonly string SessionBinding, SelectedAccountUid;
         internal Context(JsonNode request)
         {
             Request = request;
@@ -257,6 +258,32 @@ public static partial class SaveTransfer
             Work = Absolute(Str(request, "workRoot"));
             Roots.Clear(); Roots.Add(Root); Roots.Add(Work);   // 只在 Execute 的 lock (Gate) 里建：同一时刻只有这一单
             Require(!Within(Root, Work) && !Within(Work, Root), T("数据根与事务目录必须独立。", "The data root and the transaction folder must be separate."));
+            // Native launch freezes this before the first managed call. Validate
+            // before recovery or directory creation; never trust request paths to
+            // select a different user from the current native session.
+            string sessionJson = Environment.GetEnvironmentVariable("S2A_SESSION_USER");
+            if (sessionJson != null)
+            {
+                var session = Parse(Encoding.UTF8.GetBytes(sessionJson));
+                string user = Str(session, "id");
+                Require(session["schema"]?.GetValue<int>() == 1 &&
+                    System.Text.RegularExpressions.Regex.IsMatch(user, @"\A(?:0[1-9]|[1-9][0-9]{1,5})\z"),
+                    T("本局用户描述无效。", "The current session user descriptor is invalid."), "save_wrong_user");
+                Require(Absolute(Str(session, "stateRoot")) == Root &&
+                    Absolute(Environment.GetEnvironmentVariable("S2A_RYU_DATA") ?? "") == Root &&
+                    Work == Path.Combine(Path.GetDirectoryName(Root)!, "save-transfer") &&
+                    string.Equals(Environment.GetEnvironmentVariable("S2A_LAUNCH_GAME_ID"), id, StringComparison.OrdinalIgnoreCase),
+                    T("存档目标不属于当前游戏用户会话。", "The save target does not belong to the current game user session."), "save_wrong_user");
+                SelectedAccountUid = session["accountUid"]?.GetValue<string>();
+                Require(user == "01" ? SelectedAccountUid == null :
+                    SelectedAccountUid != null && Hex(SelectedAccountUid, 32) && SelectedAccountUid != new string('0', 32),
+                    T("本局用户账号无效。", "The current session user account is invalid."), "save_wrong_user");
+                SessionBinding = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    id.ToUpperInvariant() + "\n" + Root + "\n" + Work + "\n" + user + "\n" + SelectedAccountUid)));
+                if (Str(request, "operation") == "restore")
+                    Require(request["previewUserBinding"]?.GetValue<string>() == SessionBinding,
+                        T("目标用户已变化，请重新检查备份后确认。", "The target user changed. Check the backup again before confirming."), "save_changed");
+            }
             DurableDirectory(Work);
             Transactions = Path.Combine(Work, "save-transactions");
             Backups = Path.Combine(Work, "save-backups", id);

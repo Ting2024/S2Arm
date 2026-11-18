@@ -63,7 +63,13 @@ namespace Ryujinx.HLE.HOS.Applets
             }
             if (mode == UiModeUserCreator)
             {
+                if (TryPromptCreatePlayerUser("新建 S2Arm 玩家", "请输入要创建的 S2Arm 玩家名称："))
+                {
+                    return ResultCode.Success;
+                }
+
                 UserProfile created = CreatePlayerUser();
+                S2AHooks.UserSelected?.Invoke(created.UserId);
                 Logger.Info?.Print(LogClass.ServiceAm, $"User creator applet created user {created.UserId} \"{created.Name}\" (no nickname / icon UI on the host)");
                 _normalSession.Push(BuildResponse(created.UserId));
                 AppletStateChanged?.Invoke(this, null);
@@ -88,7 +94,17 @@ namespace Ryujinx.HLE.HOS.Applets
                 }
                 if (invalid.Contains(selected.UserId))
                 {
-                    UserProfile other = _system.AccountManager.GetAllUsers().FirstOrDefault(u => !invalid.Contains(u.UserId)) ?? CreatePlayerUser();
+                    UserProfile other = _system.AccountManager.GetAllUsers().FirstOrDefault(u => !invalid.Contains(u.UserId));
+                    if (other == null)
+                    {
+                        if (TryPromptCreatePlayerUser("新建 S2Arm 玩家", "新加入的手柄需要绑定独立的 S2Arm 玩家，请输入玩家名称："))
+                        {
+                            return ResultCode.Success;
+                        }
+
+                        other = CreatePlayerUser();
+                    }
+
                     Logger.Info?.Print(LogClass.ServiceAm, $"Player select applet mode {mode}: user {selected.UserId} is in the game's invalid list ({invalid.Count}), answered {other.UserId} \"{other.Name}\"");
                     selected = other;
                 }
@@ -103,6 +119,7 @@ namespace Ryujinx.HLE.HOS.Applets
             }
             else
             {
+                S2AHooks.UserSelected?.Invoke(selected.UserId);
                 _normalSession.Push(BuildResponse(selected));
             }
 
@@ -111,6 +128,52 @@ namespace Ryujinx.HLE.HOS.Applets
             _system.ReturnFocus();
 
             return ResultCode.Success;
+        }
+
+        private bool TryPromptCreatePlayerUser(string headerText, string subtitleText)
+        {
+            if (_system.Device?.UIHandler is not Ryujinx.HLE.UI.IAsyncTextInput input || S2AHooks.CreateLocalPlayer == null)
+            {
+                return false;
+            }
+
+            int nextIdx = _system.AccountManager.GetUserCount() + 1;
+            string defaultName = $"玩家{nextIdx}";
+            Ryujinx.HLE.HOS.Applets.SoftwareKeyboardUIArgs args = new()
+            {
+                KeyboardMode = Ryujinx.HLE.HOS.Applets.SoftwareKeyboard.KeyboardMode.Default,
+                HeaderText = headerText,
+                SubtitleText = subtitleText,
+                GuideText = "输入 S2Arm 玩家名称",
+                SubmitText = "创建",
+                StringLengthMin = 1,
+                StringLengthMax = 20,
+                InitialText = defaultName,
+            };
+
+            IDisposable handle = input.BeginTextInput(args, (ok, text) =>
+            {
+                System.Threading.Tasks.Task.Delay(60).ContinueWith(_ =>
+                {
+                    if (!ok)
+                    {
+                        _normalSession.Push(BuildCancelledResponse());
+                        AppletStateChanged?.Invoke(this, null);
+                        _system.ReturnFocus();
+                        return;
+                    }
+
+                    string chosenName = string.IsNullOrWhiteSpace(text) ? defaultName : text.Trim();
+                    UserProfile created = S2AHooks.CreateLocalPlayer(chosenName) ?? CreatePlayerUser();
+                    S2AHooks.UserSelected?.Invoke(created.UserId);
+                    Logger.Info?.Print(LogClass.ServiceAm, $"Player select applet created S2Arm user {created.UserId} \"{created.Name}\" via text prompt");
+                    _normalSession.Push(BuildResponse(created.UserId));
+                    AppletStateChanged?.Invoke(this, null);
+                    _system.ReturnFocus();
+                }, System.Threading.Tasks.TaskScheduler.Default);
+            });
+
+            return handle != null;
         }
 
         // Adds a user the way the console's user creator would, with the default icon and a free PlayerN nickname (the host has

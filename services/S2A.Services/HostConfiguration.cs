@@ -12,6 +12,7 @@ namespace S2A.Services
     {
         public string GameDirectory { get; }
         public string StateDirectory { get; }
+        public LauncherAccount Account { get; }
         // Optional platform-owned additions; legacy hosts retain their existing behavior.
         // SaveDirectory is persistent storage, never the destructive seed import source.
         public string SaveDirectory { get; }
@@ -53,7 +54,8 @@ namespace S2A.Services
             SystemLanguage language, RegionCode region, string timeZone, bool docked,
             IHostUIHandler userInterface, Func<ulong, MemoryBlock> serviceMemoryFactory = null,
             ScreenshotJpegEncoder screenshotEncoder = null, string saveDirectory = null,
-            Func<string> systemLanguageTag = null, Func<long> memoryFootprint = null)
+            Func<string> systemLanguageTag = null, Func<long> memoryFootprint = null,
+            LauncherAccount account = null)
         {
             ArgumentException.ThrowIfNullOrEmpty(gameDirectory);
             ArgumentException.ThrowIfNullOrEmpty(stateDirectory);
@@ -70,6 +72,8 @@ namespace S2A.Services
             if (saveDirectory != null && (!Path.IsPathFullyQualified(saveDirectory) || saveDirectory.Length == 0))
                 throw new ArgumentException("Persistent save directory must be an absolute path", nameof(saveDirectory));
             SaveDirectory = saveDirectory == null ? null : Path.GetFullPath(saveDirectory);
+            Account = account;
+            account?.ValidateRoot(SaveDirectory ?? StateDirectory);
             SystemLanguageTag = systemLanguageTag;
             MemoryFootprint = memoryFootprint;
             // Compare resolved existing ancestors: Android and macOS commonly

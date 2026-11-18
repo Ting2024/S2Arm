@@ -144,7 +144,14 @@ extension MouseOptions {
         invertX = try c.decodeIfPresent(Bool.self, forKey: .invertX) ?? false; invertY = try c.decodeIfPresent(Bool.self, forKey: .invertY) ?? false; recenter = try c.decodeIfPresent(Bool.self, forKey: .recenter) ?? true
     }
 }
+struct ControllerSelection: Codable, Equatable {
+    var backend = "system"
+    var device = ""
+}
 struct InputConfig: Codable, Equatable {
+    // Optional keeps existing schema-1 files readable without migration.
+    var controller: ControllerSelection? = nil
+    var players: [String: ControllerSelection]? = nil
     var schema = 1; var keyboard: [String:KeyBinding]; var mouse: [String:Int]; var gamepad: [String:String]; var axes: [String:AxisBinding]; var mouseOptions: MouseOptions = .init(); var deadzone = 0.15
     static let targets = ["A","B","X","Y","LS","RS","L","R","ZL","ZR","PLUS","MINUS","LEFT","UP","RIGHT","DOWN","LS_UP","LS_DOWN","LS_LEFT","LS_RIGHT","RS_UP","RS_DOWN","RS_LEFT","RS_RIGHT"]
     static let padCodes = ["east","south","north","west","leftStick","rightStick","leftShoulder","rightShoulder","leftTrigger","rightTrigger","menu","options","dpadLeft","dpadUp","dpadRight","dpadDown"]

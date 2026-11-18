@@ -9,6 +9,7 @@ import NXCore
 import NXModel
 @testable import NXLauncher
 import S2ArmAppleAdapter
+import SaveSync
 @testable import NX2AppleUI
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
@@ -1806,6 +1807,47 @@ import S2ArmAppleAdapter
         }
     }
 
+    func testDifferentLocalPlayersCanLaunchSameGameConcurrently() async throws {
+        let fixture = try SettingsFixture()
+        defer {
+            UserDefaults.standard.removeObject(forKey: LocalPlayers.listKey)
+            UserDefaults.standard.removeObject(forKey: LocalPlayers.currentKey)
+            fixture.remove()
+        }
+        fixture.runner.holdLaunch = true
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+
+        let store = S2ArmLauncherModel.playerStore()
+        let second = try store.add("Hong")
+        let first = try XCTUnwrap(store.all.first)
+        XCTAssertNotEqual(first.uid, second.uid)
+
+        store.select(first.uid)
+        fixture.model.play(game, uiLanguage: "zh-Hans")
+        for _ in 0..<100 where fixture.model.playSessions.count < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fixture.model.playSessions.count, 1)
+        XCTAssertFalse(fixture.model.busy, "游玩会话是独立进程，不应把启动器标成后台作业忙碌")
+
+        // 同一玩家重复点开始：应拦截并不再起新进程
+        fixture.model.play(game, uiLanguage: "zh-Hans")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(fixture.model.playSessions.count, 1)
+        XCTAssertNotNil(fixture.model.actionError(for: game.id))
+
+        // 切换到第二个玩家：可以同时启动同一款游戏
+        store.select(second.uid)
+        fixture.model.play(game, uiLanguage: "zh-Hans")
+        for _ in 0..<100 where fixture.model.playSessions.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fixture.model.playSessions.count, 2)
+        XCTAssertNil(fixture.model.actionError(for: game.id))
+        let launchRequests = fixture.runner.requests.filter { $0["operation"] as? String == "launch" }
+        XCTAssertEqual(launchRequests.count, 2)
+        let players = launchRequests.compactMap { ($0["player"] as? [String: Any])?["user"] as? String }
+        XCTAssertEqual(players, ["first", second.serviceUser])
+    }
+
     private func exportArtworkBounds(_ host: NSView) throws -> CGRect {
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
@@ -1946,11 +1988,22 @@ private final class SettingsRunner: JobProcessRunner {
         get { lock.withLock { playtime } }
         set { lock.withLock { playtime = newValue } }
     }
+    private var holdLaunchFlag = false
+    var holdLaunch: Bool {
+        get { lock.withLock { holdLaunchFlag } }
+        set { lock.withLock { holdLaunchFlag = newValue } }
+    }
     var requests: [[String: Any]] { lock.withLock { captured } }
     func start(executable: URL, arguments: [String], environment: [String: String], onLine: @escaping (Data) -> Void,
                onStderr: @escaping (Data) -> Void, onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
         let request = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: arguments.last!))) as! [String: Any]
         lock.withLock { captured.append(request) }
+        if request["operation"] as? String == "launch", holdLaunch {
+            let stage: [String: Any] = ["schema": 1, "taskId": request["taskId"] ?? "", "type": "stage", "stage": "游戏运行中", "stageKey": "game_running"]
+            let data = try JSONSerialization.data(withJSONObject: stage)
+            DispatchQueue.main.async { onLine(data) }
+            return Handle()
+        }
         var result: [String: Any] = [:]
         if request["operation"] as? String == "locations" { result = storageResponse }
         if request["operation"] as? String == "catalog" {

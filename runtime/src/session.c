@@ -83,12 +83,14 @@ static _Atomic(s2a_restart_done_fn) g_restart_done;   // 进程级，不随会�
 void s2a_session_on_restart_done(s2a_restart_done_fn fn) { atomic_store(&g_restart_done, fn); }
 static void *g_context;
 static uint64_t g_requested_deadline; // protected by g_request_mu
+static int g_requested_stop_only;     // protected by g_request_mu
 // One execution owner retains this slot until it has returned from every
 // blocking runtime/managed call. A timeout only completes the shell request.
 #if defined(__APPLE__)
 static struct {
     unsigned generation;
     int state;
+    int stop_only;
     uint64_t deadline;
     const char *detail;
 } g_retirement;
@@ -259,7 +261,8 @@ void s2a_session_background_end(void) {
 
 int s2a_session_guest_start_prepare(unsigned generation) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-    if (s2a_host_session_state() != S2A_SESSION_RESTARTING || generation != s2a_session_generation()) return -1;
+    int sstate = s2a_host_session_state();
+    if ((sstate != S2A_SESSION_RESTARTING && sstate != S2A_SESSION_STARTING) || generation != s2a_session_generation()) return -1;
 
     int direct_mode = s2a_gfx_mode() == S2A_GFX_DIRECT;
     void (*direct_suspend)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "s2a_direct_suspend");
@@ -271,7 +274,8 @@ int s2a_session_guest_start_prepare(unsigned generation) {
     }
 
     pthread_mutex_lock(&g_lifecycle_mu);
-    if (s2a_host_session_state() != S2A_SESSION_RESTARTING || generation != s2a_session_generation() || g_restart_guest_gate) {
+    sstate = s2a_host_session_state();
+    if ((sstate != S2A_SESSION_RESTARTING && sstate != S2A_SESSION_STARTING) || generation != s2a_session_generation() || g_restart_guest_gate) {
         pthread_mutex_unlock(&g_lifecycle_mu);
         return -1;
     }
@@ -480,9 +484,11 @@ static const char *restart_session(unsigned *generation, struct stop_progress *p
     if (!detail) {
         // Only now have old guests, service callbacks and graphics retired.
         // This CAS also disarms the old-generation deadline in the controller.
+        int stop_only = g_retirement.stop_only;
         uint64_t expected = SESSION(old, S2A_SESSION_RESTARTING);
+        uint64_t next_state = stop_only ? SESSION(old + 1, S2A_SESSION_STARTING) : SESSION(old + 1, S2A_SESSION_RESTARTING);
         if (old == UINT32_MAX || exiting() ||
-            !atomic_compare_exchange_strong(&g_session, &expected, SESSION(old + 1, S2A_SESSION_RESTARTING))) {
+            !atomic_compare_exchange_strong(&g_session, &expected, next_state)) {
             detail = "旧会话失败、宿主终局或代际耗尽，禁止启动新局";
         } else {
             *generation = old + 1;
@@ -490,12 +496,16 @@ static const char *restart_session(unsigned *generation, struct stop_progress *p
 #if defined(__APPLE__)
             dispatch_semaphore_signal(g_retirement_completion);
 #endif
-            atomic_store(&g_rebuilding, 1);
             atomic_store(&g_stop_requested, 0);
-            if (g_rebuild()) detail = "新会话启动失败，请查看应用日志";
+            if (!stop_only) {
+                atomic_store(&g_rebuilding, 1);
+                if (g_rebuild()) detail = "新会话启动失败，请查看应用日志";
+            } else {
+                LOG("进程内停止：旧会话 %u 已完整退休，进入新代 %u 等待选择游戏", old, *generation);
+            }
         }
     }
-    if (!detail && restart_guest_publish_running(*generation))
+    if (!detail && !g_retirement.stop_only && restart_guest_publish_running(*generation))
         detail = "新游戏线程在重建期间终止，请查看应用日志";
     atomic_store(&g_rebuilding, 0);
     if (detail) {
@@ -551,7 +561,8 @@ static void *control_worker(void *unused) {
         uint64_t current = atomic_load(&g_session);
         s2a_restart_callback callback = g_callback; void *context = g_context;
         uint64_t deadline = g_requested_deadline;
-        g_callback = NULL; g_context = NULL; g_requested_deadline = 0;
+        int stop_only = g_requested_stop_only;
+        g_callback = NULL; g_context = NULL; g_requested_deadline = 0; g_requested_stop_only = 0;
         pthread_mutex_unlock(&g_request_mu);
         if (exiting()) return NULL;
         int state = (unsigned)current;
@@ -563,6 +574,7 @@ static void *control_worker(void *unused) {
         if (!deadline) deadline = now_ns() + RETIREMENT_TIMEOUT_NS;
         g_retirement.generation = generation;
         g_retirement.state = state;
+        g_retirement.stop_only = stop_only;
         g_retirement.deadline = deadline;
         g_retirement.detail = NULL;
         atomic_store(&g_retirement_done, 0);
@@ -596,8 +608,8 @@ static void *control_worker(void *unused) {
         if (exiting()) return NULL;
         // 重启完成登记点先于本次请求的回调：放屏障与发起方无关（设置页 / 游戏 ExecuteProgram 走同一处）；
         //   iOS 壳两者都派回主线程，先放屏障、后回设置页，与原设置页回调里的先后一致
-        if (!detail) restart_done_notify();
-        if (callback) callback(detail ? -1 : 0, detail ? detail : "新游戏会话已启动（尚不代表首帧/存档验收）", context);
+        if (!detail && !stop_only) restart_done_notify();
+        if (callback) callback(detail ? -1 : 0, detail ? detail : (stop_only ? "游戏会话已关闭" : "新游戏会话已启动（尚不代表首帧/存档验收）"), context);
     }
 }
 #endif
@@ -668,7 +680,7 @@ int s2a_session_prepare(void) {
     return rc ? -1 : 0;
 }
 
-int s2a_host_restart(s2a_restart_callback callback, void *context) {
+static int request_session_transition(s2a_restart_callback callback, void *context, int stop_only) {
     if (pthread_mutex_trylock(&g_request_mu)) return -3;
     int state = s2a_host_session_state();
     if (!atomic_load(&g_control_ready) || exiting()) { pthread_mutex_unlock(&g_request_mu); return -2; }
@@ -710,17 +722,18 @@ int s2a_host_restart(s2a_restart_callback callback, void *context) {
     }
     g_callback = callback; g_context = context;
     g_requested_deadline = now_ns() + RETIREMENT_TIMEOUT_NS;
+    g_requested_stop_only = stop_only;
     unsigned generation = s2a_session_generation();
     pthread_mutex_lock(&g_lifecycle_mu);
     if (g_lifecycle_transition_active) {
         pthread_mutex_unlock(&g_lifecycle_mu);
-        g_callback = NULL; g_context = NULL; g_requested_deadline = 0;
+        g_callback = NULL; g_context = NULL; g_requested_deadline = 0; g_requested_stop_only = 0;
         pthread_mutex_unlock(&g_request_mu); return -3;
     }
     uint64_t expected = SESSION(generation, S2A_SESSION_RUNNING);
     if (!atomic_compare_exchange_strong(&g_session, &expected, SESSION(generation, S2A_SESSION_RESTARTING))) {
         pthread_mutex_unlock(&g_lifecycle_mu);
-        g_callback = NULL; g_context = NULL; g_requested_deadline = 0;
+        g_callback = NULL; g_context = NULL; g_requested_deadline = 0; g_requested_stop_only = 0;
         pthread_mutex_unlock(&g_request_mu); return -1;
     }
     g_restart_guest_gate = 0;
@@ -728,4 +741,12 @@ int s2a_host_restart(s2a_restart_callback callback, void *context) {
     pthread_mutex_unlock(&g_request_mu);
     wake_control();
     return 0;
+}
+
+int s2a_host_restart(s2a_restart_callback callback, void *context) {
+    return request_session_transition(callback, context, 0);
+}
+
+int s2a_host_stop(s2a_restart_callback callback, void *context) {
+    return request_session_transition(callback, context, 1);
 }

@@ -120,16 +120,20 @@ public final class SettingsProvider {
     }
 
     private func write() throws {
+        lock.lock(); defer { lock.unlock() }
+        try writeLocked()
+    }
+
+    private func writeLocked() throws {
         let dir = store.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var file: [String: Any] = ["schema": 1]
-        if let saved = lock.withLock({ targets }) { file["exportTargets"] = saved }
-        if let saved = lock.withLock({ location }) { file["exportLocation"] = saved }
-        let byGame = lock.withLock { picks }
-        if !byGame.isEmpty { file["exportLocationByGame"] = byGame }
-        if lock.withLock({ ai }) { file["aiControl"] = true }
-        if let folder = lock.withLock({ cloud }) { file["cloudSavesFolder"] = folder }
-        if !lock.withLock({ widget }) { file["homeWidget"] = false }
+        if let saved = targets { file["exportTargets"] = saved }
+        if let saved = location { file["exportLocation"] = saved }
+        if !picks.isEmpty { file["exportLocationByGame"] = picks }
+        if ai { file["aiControl"] = true }
+        if let folder = cloud { file["cloudSavesFolder"] = folder }
+        if !widget { file["homeWidget"] = false }
         let data = try JSONSerialization.data(withJSONObject: file, options: [.sortedKeys])
         try data.write(to: store, options: .atomic)
     }

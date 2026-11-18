@@ -35,6 +35,10 @@ namespace S2A.Services
         public static delegate* unmanaged<uint> AutoplayKeys1;
         public static delegate* unmanaged<uint> AutoplayKeys2;
         public static delegate* unmanaged<int> AutoplayPads;
+        // Set before Start by platform composition/tests, or discovered from the
+        // native host. Never change input ownership after the HID thread starts.
+        internal static delegate* unmanaged<PlayerInputFrame*, uint, int> PlayerReader;
+        private static PlayerInput _players;
         private static Thread _thread;
         private static volatile bool _stop;
         private static volatile PlayerIndex _player = PlayerIndex.Handheld;
@@ -81,9 +85,16 @@ namespace S2A.Services
             return -1;
         }
         public static bool ExternalController => _externalController;
+        internal static bool IndependentPlayers => _players != null;
 
         public static void Start(Switch device)
         {
+            if (_thread == null)
+            {
+                if (PlayerReader == null && NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "s2a_player_input_read_v1", out nint reader))   // 平台例外：Mac 游戏窗口（macos/front_mac.m）可选的四路独立手柄快照导出，无窗口宿主与其它平台没有，进不了 Native.Imports 的 DllImport
+                    PlayerReader = (delegate* unmanaged<PlayerInputFrame*, uint, int>)reader;
+                _players = PlayerReader != null ? new PlayerInput() : null;
+            }
             SetPrimary(device, Host.Docked ? PlayerIndex.Player1 : PlayerIndex.Handheld, Host.Docked ? ControllerType.ProController : ControllerType.Handheld);
             // 游戏声明收哪些手柄号 / 样式时，在那次服务调用里就跟随改接（NpadDevices.S2ASupportedChanged）。原先只靠下面采样泵 250 ms 一拍：
             //   11-14 #cef2ab 一款游戏起局只声明 Player1，泵下一拍（0.6–1.2 s，或它后来再声明后的 11 / 22 / 102 s）才把掌机格改接到 Player1 Pro，
@@ -102,6 +113,7 @@ namespace S2A.Services
         private static bool _movedOffHandheld;
         internal static void FollowSupportedPlayers(Switch device)
         {
+            if (_players != null) return; // Independent player IDs never compact/remap into handheld.
             bool handheld = device.Hid.Npads.IsSupportedPlayer(PlayerIndex.Handheld), player1 = device.Hid.Npads.IsSupportedPlayer(PlayerIndex.Player1);
             if (_player == PlayerIndex.Handheld && !handheld && player1)
             {
@@ -242,6 +254,7 @@ namespace S2A.Services
         // 开到 n 个虚拟手柄（最多 MaxPads，只增不减；收局 Stop 回到 S2A_AP_PADS 给的个数），按当前主手柄重配
         public static void SetPads(Switch device, int n)
         {
+            if (_players != null) return; // Only actual platform connections own slots; no mirrors.
             if (n > MaxPads) Red.Report($"游戏要 {n} 个手柄，虚拟手柄最多 {MaxPads} 个");
             n = Math.Min(n, Math.Min(MaxPads, _padCap));   // 小程序给过的人数上限也不超（多连的手柄 / 自动玩家要的二号都不分给游戏）
             if (n <= _pads) return;
@@ -269,7 +282,7 @@ namespace S2A.Services
             {
                 (player, type) = (PlayerIndex.Player1, ControllerType.ProController);
             }
-            lock (device.Hid.Npads.RumbleSyncRoot)
+            if (_players == null) lock (device.Hid.Npads.RumbleSyncRoot)
             {
                 PlayerIndex second = _pads > 1 ? (player == PlayerIndex.Player8 ? PlayerIndex.Player1 : player + 1) : PlayerIndex.Unknown;
                 if (_pads > 1)
@@ -307,6 +320,8 @@ namespace S2A.Services
                 Interlocked.Increment(ref _configurationGeneration);
             }
             ReportStyle(device);   // 宿主按这一格的样式决定单只 Joy-Con 报原始方向还是转横握（#520 A）
+
+            if (_players != null) _device = device;
 
             if (_thread != null)
             {
@@ -434,6 +449,8 @@ namespace S2A.Services
             _pads = EnvPads;
             _padCap = MaxPads;   // 上一局小程序给的上限不带进下一局
             _second = PlayerIndex.Unknown;
+            _players = null;
+            PlayerReader = null;
             _lastSticks = default;
             _movedOffHandheld = false;   // 审计 P1-94：上一局「挪出掌机格」不带进下一局（同进程重启）
             _styleBefore = ControllerType.None;   // 同上：上一局「按样式换过」不带进下一局
@@ -805,6 +822,24 @@ namespace S2A.Services
             {
                 Ryujinx.Common.S2AThreadAlloc.Tick("输入");
                 Lifecycle.Tick(Host.Device?.System);   // 焦点 / 底座变化转给游戏（接口 v2.15）
+                if (_players != null)
+                {
+                    PlayerInputFrame frame = default;
+                    bool available = PlayerReader(&frame, (uint)sizeof(PlayerInputFrame)) == 1;
+                    RefreshFeedback(device);
+                    _players.Commit(device, frame, available, TextInput.Open);
+                    uint mask = _players.ConnectedMask;
+                    _pads = System.Numerics.BitOperations.PopCount(mask);
+                    _player = PlayerIndex.Player1;
+                    _type = ControllerType.ProController;
+                    _second = (mask & 2) != 0 ? PlayerIndex.Player2 : PlayerIndex.Unknown;
+                    _externalController = mask != 0;
+                    if (TouchHook != null) TouchHook(device);
+                    else PushTouch(device);
+                    _feedback?.Update(PlayerIndex.Player1);
+                    Thread.Sleep(16);
+                    continue;
+                }
                 if (AutoplayPads != null && AutoplayPads() > _pads) SetPads(device, AutoplayPads());   // 先改配再取主手柄号：两人时主手柄离开掌机格
                 // 本地多手柄：Mac 前端报告接了几只手柄就开到几格（最多 MaxPads），接上第二只手柄即成为玩家 2
                 int livePads = _vpadPadCount != null ? _vpadPadCount() : 0;

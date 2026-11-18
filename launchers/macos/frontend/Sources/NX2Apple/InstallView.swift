@@ -16,6 +16,11 @@ struct InstallView: View {
     var onOpenSettings: (() -> Void)? = nil
     @State private var showRemoveConfirm = false
     @State private var showRestoreConfirm = false
+    @State private var hostOnly = false
+    @State private var confirmHost = false
+    @State private var hostPreview: HostInstallPreview?
+    @State private var previewingHost = false
+    @State private var previewError: String?
 
     private var game: GameSummary? { model.games.first { $0.id == gameID } }
     private static let pollSeconds: UInt64 = 5
@@ -45,7 +50,14 @@ struct InstallView: View {
             } else if model.installDone == gameID { doneContent } else if let job = installJob {
                 VStack(alignment: .leading, spacing: 10) {
                     // 手机作业三态统一（PhoneJobPanel）：钥匙串提示只在后端标了 keychainPrompt 的阶段挂（#266），在组件里
-                    ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading)
+                            if !model.phoneQueue.isEmpty {
+                                PhoneQueueListSection(model: model)
+                            }
+                        }
+                    }
                     // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
                     HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background").controllerShortcut(.back) }
                 }
@@ -53,10 +65,21 @@ struct InstallView: View {
             } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    if let previewError { Text(loc.backend(previewError)).foregroundStyle(LauncherPalette.danger) }
+                    Picker(loc.t("s2arm.install.operation"), selection: $hostOnly) {
+                        Text(loc.t("s2arm.install.resourcesOnly")).tag(false)
+                        Text(loc.t("s2arm.install.hostOnly")).tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(loc.t(hostOnly ? "s2arm.install.hostHelp" : "s2arm.install.resourceHelp"))
+                        .font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     // 上一次手机作业没成：同一个结局组件（原因 + 下一步 + 复制错误摘要 + 详细过程），下面照旧是清单，改好了直接再点
-                    if let failed = model.inlineFailure, [.install, .installRemove, .installRestore].contains(failed.kind),
+                    if let failed = model.inlineFailure, [.install, .installHost, .installRemove, .installRestore].contains(failed.kind),
                        let last = model.lastPhoneSession, last.kind == failed.kind {
                         PhoneJobPanel(model: model, session: last)
+                    } else if let failed = model.inlineFailure, (failed.kind == .install || failed.kind == .installHost) {
+                        Text(loc.backend(failed.message)).font(.manrope(13)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
+                        CopyReportButton(model: model, gameID: gameID, operations: ["install", "installHost", "installRemove"], fallback: failed.message)
                     }
                     // 装到哪台：和出包页同一行；选过的那台不在线时如实说、让玩家改选（清单只看这台、每次现查）
                     TargetDeviceRow(model: model).onChange(of: model.installDeviceID) { _ in model.checkInstall(gameID) }
@@ -104,10 +127,13 @@ struct InstallView: View {
                                 Text(text("install.restore_body"))
                             }
                     }
+                    if model.phoneBusy || !model.phoneQueue.isEmpty {
+                        PhoneQueueListSection(model: model)
+                    }
                     if let game {
                         Button(text("install.remove")) { showRemoveConfirm = true }
                             .controllerButtonStyle(LauncherSecondaryButtonStyle())
-                            .disabled(queued)
+                            .disabled(model.phoneOperationBlocked(kind: .removeFromPhone, gameID: gameID) || queued)
                             .confirmationDialog(text("install.remove_title"), isPresented: $showRemoveConfirm, titleVisibility: .visible) {
                                 Button(text("install.remove_confirm"), role: .destructive) { model.removeFromPhone(game) }
                                 Button(loc.t("launch.done"), role: .cancel) {}
@@ -135,8 +161,14 @@ struct InstallView: View {
                 HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back) }
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else if let job = installJob {
-                HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stopPhone() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping).controllerShortcut(.back) }
-                    .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
+                HStack {
+                    Spacer()
+                    Button(loc.t("s2arm.job.cancel")) {
+                        if model.phoneBusy { model.stopPhone() } else { model.stop() }
+                    }
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping).controllerShortcut(.back)
+                }
+                .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else {
             HStack(spacing: 14) {
                 // 已排队（手机上一个作业没完 / 这款正在出包）：说一句，出完 / 前一个装完自动接着装
@@ -148,15 +180,36 @@ struct InstallView: View {
                         .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa").controllerShortcut(.secondary)
                 }
                 Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, .back, focused: true)
-                Button(loc.t("s2arm.install.start")) {
-                    if let game { model.clearInlineFailure(); model.install(game) }
+                Button(loc.t(hostOnly ? "s2arm.install.hostOnly" : "s2arm.install.start")) {
+                    if hostOnly {
+                        previewingHost = true; hostPreview = nil; previewError = nil
+                        Task {
+                            defer { previewingHost = false }
+                            do {
+                                if model.installDeviceID == nil, model.connectedDevices.isEmpty { await model.refreshTargets() }
+                                hostPreview = try await model.provider.previewHost(gameId: gameID, device: model.installDeviceID)
+                                confirmHost = true
+                            } catch { previewError = error.localizedDescription }
+                        }
+                    } else if let game {
+                        model.clearInlineFailure(); model.install(game)
+                    }
+                }
+                .confirmationDialog(loc.t("s2arm.install.hostOnly"), isPresented: $confirmHost, titleVisibility: .visible) {
+                    Button(loc.t("s2arm.install.hostConfirm")) {
+                        if let game, let hostPreview { model.clearInlineFailure(); model.installHost(game, confirmation: hostPreview.token, device: model.installDeviceID); self.hostPreview = nil }
+                    }
+                    Button(loc.t("launch.done"), role: .cancel) {}
+                } message: {
+                    Text(loc.t(hostPreview?.unknownInstallation == true ? "s2arm.install.unknownConfirm" : "s2arm.install.hostHelp") +
+                         "\n" + (hostPreview?.installedVersion ?? "") + "\n" + (hostPreview?.games.joined(separator: ", ") ?? ""))
                 }
                 .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                 // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
-                // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因。
-                // 别的作业在跑不挡（11-16 维护者「出包时也能装别的游戏」）：手机上一个作业没完 / 这款正在出包就排队，只有这款已排上时置灰
-                .disabled(queued)
-                .opacity(queued ? 0.45 : 1)
+                // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因；只在有冲突作业或已排队时置灰
+                .disabled(phoneBlocked || queued || previewingHost)
+                .opacity(!(phoneBlocked || queued) ? 1 : 0.45)
+                .busyHint(model)
             }
             .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             }
@@ -183,14 +236,22 @@ struct InstallView: View {
     /// 这一款的「导出自签包」会话：在跑的那个，或刚结束的那个（结局卡按它画）
     private var exportJob: JobSession? {
         guard model.selfSigning else { return nil }
+        if let s = model.session, s.kind == .install, s.gameID == gameID { return s }
         if let s = model.phoneSession, s.kind == .install, s.gameID == gameID { return s }
         if let s = model.lastPhoneSession, s.kind == .install, s.gameID == gameID { return s }
         return nil
     }
+    private var phoneBlocked: Bool {
+        let kind: OperationIntent.Kind = hostOnly ? .installHost : .transfer
+        let sessionKind: JobSession.Kind = hostOnly ? .installHost : .install
+        return model.phoneOperationBlocked(kind: kind, gameID: gameID) ||
+               model.isPhoneJobActive(gameID: gameID, kind: sessionKind) ||
+               model.isPhoneJobQueued(gameID: gameID, kind: sessionKind)
+    }
     /// 这一款在手机槽里跑着的装机 / 删除 / 装回（别款的手机作业不画进这款的窗）
     private var installJob: JobSession? {
-        guard let s = model.phoneSession, [.install, .installRemove, .installRestore].contains(s.kind), s.gameID == gameID else { return nil }
-        return s
+        if let p = model.phoneSession, p.gameID == gameID, (p.kind == .install || p.kind == .installHost || p.kind == .installRemove || p.kind == .installRestore) { return p }
+        return (model.session?.gameID == gameID && (model.session?.kind == .install || model.session?.kind == .installHost || model.session?.kind == .installRemove || model.session?.kind == .installRestore)) ? model.session : nil
     }
     private var queued: Bool { model.phoneQueued(gameID) }
     private func text(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
@@ -230,7 +291,7 @@ struct InstallView: View {
             if model.installOpenToFinish {
                 Text(text("install.done.open")).font(.manrope(15, .semibold)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
-            Text(trustNote).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Text(hostOnly ? loc.t("s2arm.install.hostDone") : trustNote).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             if game?.iphoneFree == true {
                 Text(text("install.done.free")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
@@ -247,5 +308,131 @@ struct InstallView: View {
         if !r.device.isEmpty { parts.append(String(format: loc.t("s2arm.install.device"), r.device)) }
         if !r.account.isEmpty { parts.append(String(format: loc.t("s2arm.install.account"), r.account)) }
         return parts.joined(separator: " · ")
+    }
+}
+
+struct PhoneQueueListSection: View {
+    @ObservedObject var model: S2ArmLauncherModel
+    @EnvironmentObject var loc: Localizer
+
+    private var zh: Bool { loc.lang == .zh }
+
+    private func kindLabel(_ kind: JobSession.Kind) -> String {
+        switch kind {
+        case .installHost: return loc.t("s2arm.install.hostOnly")
+        case .installRemove: return BackendText.launcherText("install.remove", language: zh ? "zh-Hans" : "en")
+        default: return loc.t("s2arm.install.resourcesOnly")
+        }
+    }
+
+    var body: some View {
+        if model.phoneBusy || !model.phoneQueue.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(zh ? "推送 / 装机队列" : "Phone Queue")
+                        .font(.manrope(14, .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                VStack(spacing: 8) {
+                    if model.phoneBusy, let session = model.phoneSession {
+                        HStack(spacing: 12) {
+                            Image(systemName: "iphone")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20)
+                            Text("1")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.name)
+                                    .font(.manrope(13, .bold))
+                                    .lineLimit(1)
+                                Text(kindLabel(session.kind))
+                                    .font(.manrope(11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(zh ? "进行中" : "In Progress")
+                                .font(.manrope(11.5, .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(LauncherPalette.building.opacity(0.14), in: Capsule())
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(LauncherPalette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(LauncherPalette.building.opacity(0.45), lineWidth: 1))
+                    }
+
+                    ForEach(Array(model.phoneQueue.enumerated()), id: \.element.id) { index, item in
+                        let displayIndex = model.phoneBusy ? index + 2 : index + 1
+                        HStack(spacing: 12) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("\(displayIndex)")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.game.name)
+                                    .font(.manrope(13, .semibold))
+                                    .lineLimit(1)
+                                Text(kindLabel(item.kind))
+                                    .font(.manrope(11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Button {
+                                    model.moveQueuedPhoneJob(fromIndex: index, toIndex: index - 1)
+                                } label: {
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == 0)
+                                .opacity(index == 0 ? 0.3 : 1)
+                                .help(zh ? "上移" : "Move Up")
+
+                                Button {
+                                    model.moveQueuedPhoneJob(fromIndex: index, toIndex: index + 1)
+                                } label: {
+                                    Image(systemName: "arrow.down")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == model.phoneQueue.count - 1)
+                                .opacity(index == model.phoneQueue.count - 1 ? 0.3 : 1)
+                                .help(zh ? "下移" : "Move Down")
+
+                                Button {
+                                    model.removeQueuedPhoneJob(id: item.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(zh ? "移出队列" : "Remove from Queue")
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(LauncherPalette.surface.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                    }
+                }
+            }
+        }
     }
 }

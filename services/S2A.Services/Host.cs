@@ -331,6 +331,7 @@ namespace S2A.Services
             HorizonHost.Reset();
             GuestMemory.ResetSession();
             Application.Reset();
+            LocalPlayer.ResetSession();
             Aoc.Reset();
             SystemDataSeen.Clear();
             Ryujinx.HLE.S2ASessionState.End();
@@ -624,6 +625,15 @@ namespace S2A.Services
         private static Dispatcher BootCore(IRenderer renderer, IHardwareDeviceDriver audio, string baseDir,
             HostConfiguration configuration, Action<Exception> serviceFailure)
         {
+            // Validate before creating any directories or AccountManager profiles.
+            // Explicit platform configuration never inherits launcher environment.
+            LauncherAccount launcherAccount = configuration != null ? configuration.Account :
+                LauncherAccount.Parse(Environment.GetEnvironmentVariable("S2A_SESSION_USER"));
+            launcherAccount?.ValidateRoot(configuration?.SaveDirectory ?? baseDir);
+            if (launcherAccount != null && configuration == null &&
+                !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("S2A_SAVE_DIR")))
+                throw new ArgumentException("Launcher accounts cannot be combined with destructive save seeds");
+
             // 带配置的会话只用平台登记的读数：没给就是「取不到」（-1），不落到苹果 libSystem（#1073）
             MemDiag.FootprintProvider = configuration == null ? null : configuration.MemoryFootprint ?? (() => -1);
             MemDiag.Startup();   // 起局一行 GC 配置 / 进程内存；S2A_MEMPROBE=1 时先做托管内存上限探测
@@ -741,6 +751,7 @@ namespace S2A.Services
             ContentManager content = new(vfs);
             content.LoadEntries(); // Ryujinx 界面启动时做的一步；不做则 Horizon 服务（ngc 等）挂载系统数据时查不到存储位置而崩
             AccountManager account = new(libHac.RyujinxClient, null);
+            launcherAccount?.Apply(account);
             UserChannelPersistence channel = Channel;   // 进程级，跨重启存活（见 Channel）
 
             if (LdnServer == "lan") StartLanDiscovery();
@@ -858,6 +869,21 @@ namespace S2A.Services
         // 小程序循环重验通过即回游戏。已配好仍连着 3 次不过 = 游戏要的配置一个手柄给不了（如要 2 人起），报红交回游戏
         public bool DisplayMessageDialog(ControllerAppletUIArgs args)
         {
+            if (InputPump.IndependentPlayers)
+            {
+                // Independent platform slots are real connections, not a request
+                // to fabricate/mirror more controllers. Check what the guest can
+                // actually see; never move 2P into 1P or force a handheld slot.
+                int connected = 0;
+                for (int i = 0; i < 4; i++)
+                {
+                    var index = (PlayerIndex)i;
+                    if (!System.Linq.Enumerable.Contains(args.SupportedPlayers, index)) continue;
+                    var style = (ControllerType)Host.Device.Hid.SharedMemory.Npads[i].InternalState.StyleSet;
+                    if (style != ControllerType.None && (style & args.SupportedStyles) != 0) connected++;
+                }
+                return connected >= args.PlayerCountMin && connected <= args.PlayerCountMax;
+            }
             // 游戏声明至少 2 人（强制本地合作）：真机上要再连一个手柄，这里开出第二个虚拟手柄（InputPump.SetPads，镜像第一个的输入）
             // 先按上限收回多的（#809：要 1 人、连着两个时原先照配两格，重验不过反复重开），再按下限补开
             InputPump.CapPads(Host.Device, args.PlayerCountMax);

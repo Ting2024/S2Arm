@@ -24,6 +24,7 @@ namespace Ryujinx.HLE.HOS.Services.Account.Acc
         private readonly HorizonClient _horizonClient;
 
         private readonly ConcurrentDictionary<string, UserProfile> _profiles;
+        private string[] _userOrder = [];
         private UserProfile[] _storedOpenedUsers;
 
         public UserProfile LastOpenedUser { get; private set; }
@@ -219,7 +220,7 @@ namespace Ryujinx.HLE.HOS.Services.Account.Acc
 
         internal int GetUserCount()
         {
-            return _profiles.Count;
+            return GetAllUsers().Count();
         }
 
         internal bool TryGetUser(UserId userId, out UserProfile profile)
@@ -229,7 +230,108 @@ namespace Ryujinx.HLE.HOS.Services.Account.Acc
 
         public IEnumerable<UserProfile> GetAllUsers()
         {
-            return _profiles.Values;
+            string[] order = _userOrder;
+            UserProfile current = LastOpenedUser;
+            if ((order == null || order.Length == 0) && current == null)
+            {
+                return _profiles.Values;
+            }
+
+            var list = new List<UserProfile>(_profiles.Count);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (order != null && order.Length > 0)
+            {
+                var allowed = new HashSet<string>(order, StringComparer.OrdinalIgnoreCase);
+                if (current != null && allowed.Contains(current.UserId.ToString()) && _profiles.TryGetValue(current.UserId.ToString(), out UserProfile curProfile))
+                {
+                    list.Add(curProfile);
+                    seen.Add(curProfile.UserId.ToString());
+                }
+
+                foreach (string uid in order)
+                {
+                    if (!string.IsNullOrEmpty(uid) && seen.Add(uid) && _profiles.TryGetValue(uid, out UserProfile p))
+                    {
+                        list.Add(p);
+                    }
+                }
+
+                return list;
+            }
+
+            if (current != null && _profiles.TryGetValue(current.UserId.ToString(), out UserProfile curOnly))
+            {
+                list.Add(curOnly);
+                seen.Add(curOnly.UserId.ToString());
+            }
+
+            foreach (var kv in _profiles.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (seen.Add(kv.Key))
+                {
+                    list.Add(kv.Value);
+                }
+            }
+
+            return list;
+        }
+
+        public void SetUserOrder(IEnumerable<UserId> orderedUsers)
+        {
+            _userOrder = orderedUsers?.Select(u => u.ToString()).Where(s => !string.IsNullOrEmpty(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        }
+
+        public bool RemoveProfileOnly(UserId userId)
+        {
+            string key = userId.ToString();
+            if (LastOpenedUser != null && LastOpenedUser.UserId == userId)
+            {
+                return false;
+            }
+
+            if (_profiles.TryRemove(key, out _))
+            {
+                _accountSaveDataManager.Save(_profiles);
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool RemoveAutoCreatedUserIfUnused(UserId userId)
+        {
+            string key = userId.ToString();
+            if (!_profiles.TryGetValue(key, out UserProfile profile))
+            {
+                return false;
+            }
+
+            if (LastOpenedUser != null && LastOpenedUser.UserId == userId)
+            {
+                return false;
+            }
+
+            // Do not remove if the user already has any save data in the index.
+            SaveDataFilter saveDataFilter = SaveDataFilter.Make(programId: default, saveType: default,
+                new LibHac.Fs.UserId((ulong)userId.High, (ulong)userId.Low), saveDataId: default, index: default);
+            using UniqueRef<SaveDataIterator> saveDataIterator = new();
+            if (_horizonClient.Fs.OpenSaveDataIterator(ref saveDataIterator.Ref, SaveDataSpaceId.User, in saveDataFilter).IsSuccess())
+            {
+                Span<SaveDataInfo> saveDataInfo = stackalloc SaveDataInfo[1];
+                if (saveDataIterator.Get.ReadSaveDataInfo(out long readCount, saveDataInfo).IsSuccess() && readCount > 0)
+                {
+                    return false;
+                }
+            }
+
+            if (_profiles.TryRemove(key, out _))
+            {
+                _accountSaveDataManager.Save(_profiles);
+                return true;
+            }
+
+            return false;
         }
 
         internal IEnumerable<UserProfile> GetOpenedUsers()
@@ -269,9 +371,23 @@ namespace Ryujinx.HLE.HOS.Services.Account.Acc
             _storedOpenedUsers = _profiles.Values.Where(x => x.AccountState == AccountState.Open).ToArray();
         }
 
+        // Explicit launcher selection is session-local; no global hook and no
+        // deletion of the runtime's default profile or its save data.
+        private UserProfile _sessionUser;
+
+        public void SelectSessionUser(UserId userId)
+        {
+            if (!_profiles.TryGetValue(userId.ToString(), out UserProfile profile))
+                throw new System.ArgumentException("Session account does not exist");
+            OpenUser(userId);
+            _sessionUser = profile;
+        }
+
         internal UserProfile GetFirst()
         {
-            return _profiles.First().Value;
+            // acc:u0 51/52 must not pick an arbitrary dictionary entry when the
+            // launcher explicitly selected another user. Legacy behavior stays.
+            return _sessionUser ?? _profiles.First().Value;
         }
     }
 }

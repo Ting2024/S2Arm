@@ -1,9 +1,10 @@
 // S2Arm（不是上游文件）：键位设置（InputSettingsSheet）的数据与读写。键位格式同旧启动器 Models.swift 的 InputConfig
 // （作业层 pack/jobs/library.py validate_input 的契约：schema 1、keyboard / mouse / gamepad / axes / mouseOptions / deadzone），
 // 按玩家保存（键位设置里选玩家 1–4）：玩家 1 读这款文件夹里的 input.json → 私有目录 default-input.json → 标准键位（同起局 build.py 的取法）；
-// 玩家 2–4 读这款文件夹里的 input-pN.json → 标准键位；写：saveInput 作业（作业层校验后原子写，起局时玩家 2–4 的经 S2A_INPUT_CONFIG_P2..P4
-// 交给宿主，front_mac.m 槽 i = 玩家 i+1 各照各的映射采样），下次开始游戏时生效。
+// 玩家 2–4 读这款文件夹里的 input-pN.json → 标准键位；同时支持按用户读取 mappings/<id>.json / mappings/users/<uid>/<id>.json 与 MNG 1P–4P 状态。
+// 写：saveInput 作业（作业层校验后原子写），下次开始游戏时生效。
 import Foundation
+import CryptoKit
 import S2ArmAppleAdapter
 
 struct KeyBinding: Codable, Equatable { var code: Int; var modifiers: Int = 0 }
@@ -35,7 +36,16 @@ extension MouseOptions {
     }
 }
 
+struct ControllerSelection: Codable, Equatable {
+    var backend = "system"
+    var device = ""
+    var type: Int? = nil
+    var source: Int? = nil
+}
 struct InputConfig: Codable, Equatable {
+    // Optional keeps existing schema-1 files readable without migration.
+    var controller: ControllerSelection? = nil
+    var players: [String: ControllerSelection]? = nil
     var schema = 1; var keyboard: [String: KeyBinding]; var mouse: [String: Int]; var gamepad: [String: String]; var axes: [String: AxisBinding]
     var mouseOptions: MouseOptions = .init(); var deadzone = 0.15
     var backButtons: [String: String]?
@@ -96,14 +106,20 @@ struct InputConfig: Codable, Equatable {
 
 /// 读到的键位与出处：读不懂已存的文件时 problem 为真（先显示默认键位，保存会覆盖它）；
 ///   inherited 为真是玩家 2–4 没存过自己的键位、沿用玩家 1 的那份（与起局一致，保存后单独生效）。
-struct LoadedInput { let config: InputConfig; let problem: Bool; var inherited = false }
+///   revision 覆盖 JSON 与原生输入文件快照，防止并发改动或损坏快照被覆盖。
+struct LoadedInput {
+    let config: InputConfig
+    let problem: Bool
+    var inherited = false
+    var revision: [String: String]? = nil
+}
 
 extension S2ArmLauncherModel {
     /// 这款现在的键位：玩家 1 = 这款文件夹里的 input.json，没有就用私有目录的 default-input.json，再没有用标准键位（同起局 build.py 的取法）；
     ///   玩家 2–4 = 这款文件夹里的 input-pN.json（键位设置按玩家保存），没存过 / 存坏了就沿用玩家 1 的键位——
     ///   起局时这几位没存就是照玩家 1 的那份进游戏（build.py 不带、宿主落回全局映射），弹窗显示要跟实际玩的一致。
     /// 游戏库结构 v3 起键位在每款自己的文件夹（作业层 layout 把旧的 mappings/<号>.json 搬进去了）；原先还读 mappings/ 永远读不到，存过的键位重开显示成默认
-    func loadInput(gameID: String, player: Int = 1) -> LoadedInput {
+    func loadInput(gameID: String, player: Int) -> LoadedInput {
         let env = provider.client.environment
         var problem = false
         let file = player == 1 ? "input.json" : "input-p\(player).json"
@@ -113,17 +129,184 @@ extension S2ArmLauncherModel {
                 problem = true
             }
         }
+        if player == 1, !env.library.isEmpty {
+            let mappingPath = URL(fileURLWithPath: env.library).appendingPathComponent("mappings/\(gameID).json")
+            if let data = try? Data(contentsOf: mappingPath) {
+                if let config = try? JSONDecoder().decode(InputConfig.self, from: data) { return LoadedInput(config: config, problem: problem) }
+                problem = true
+            }
+        }
         if player > 1 { return LoadedInput(config: loadInput(gameID: gameID, player: 1).config, problem: problem, inherited: true) }
         if let data = try? Data(contentsOf: env.privateRoot.appendingPathComponent("default-input.json")),
            let config = try? JSONDecoder().decode(InputConfig.self, from: data) { return LoadedInput(config: config, problem: problem) }
         return LoadedInput(config: .standard, problem: problem)
     }
 
+    private func normalizedInputConfig(_ config: InputConfig) -> InputConfig {
+        var normalized = config
+        if var players = normalized.players {
+            for k in ["1", "2", "3", "4"] where players[k] == nil {
+                players[k] = k == "1" ? (normalized.controller ?? ControllerSelection(backend: "system", device: "")) : ControllerSelection(backend: "disabled", device: "")
+            }
+            normalized.players = players
+            normalized.controller = nil
+        }
+        return normalized
+    }
+
     /// 存这款的键位（saveInput 作业，player 1–4：1 = input.json，2–4 = input-pN.json，作业层校验后原子写）。
     /// 没配游戏库不起作业；作业层拒收抛 JobFailure，message 是作业层原句。
-    func saveInput(_ config: InputConfig, gameID: String, player: Int = 1) async throws {
+    func saveInput(_ config: InputConfig, gameID: String, player: Int) async throws {
         guard !provider.client.environment.library.isEmpty else { throw JobClientError(LibraryProvider.noLibraryMessage) }
-        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config))
+        let normalized = normalizedInputConfig(config)
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(normalized))
         _ = try await provider.client.perform("saveInput", extra: ["config": object, "gameId": gameID, "player": player])
+    }
+
+    private func inputRevision(gameID: String, user: String) throws -> [String: String] {
+        let env = provider.client.environment
+        let prefix = user == "01" ? "mappings" : "mappings/users/\(user)"
+        let library = URL(fileURLWithPath: env.library)
+        let root = library.appendingPathComponent("\(prefix)/mng/\(gameID)")
+        var paths = ["game": library.appendingPathComponent("\(prefix)/\(gameID).json"),
+                     "default": env.privateRoot.appendingPathComponent("default-input.json")]
+        // Matches users.MNG_INPUT_FILES; changes to non-visible mappings also invalidate a stale panel.
+        for name in ["controls.txt", "controller-type.txt", "mouse.txt", "controller-slots.plist",
+                     "controller-devices.plist", "input-sources.plist", "keyboard-slots.plist",
+                     "physical-keyboards.plist", "stick-bindings.plist"] {
+            paths[name] = root.appendingPathComponent(name)
+        }
+        return try paths.mapValues { path in
+            do { return SHA256.hash(data: try Data(contentsOf: path)).map { String(format: "%02x", $0) }.joined() }
+            catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+                return "missing"
+            }
+        }
+    }
+
+    private func isAdmittedInputUser(_ user: String) -> Bool {
+        if let registry = userRegistry {
+            return registry.users.contains { $0.id == user }
+        }
+        return usersError == nil && user == "01"
+    }
+
+    /// 捕获用户的游戏键位；不借用另一用户的游戏映射，并同步读取游戏内 MNG 1P–4P 状态。
+    func loadInput(gameID: String, userID: String? = nil) -> LoadedInput {
+        let user = userID ?? selectedUserID
+        guard isAdmittedInputUser(user) else {
+            return LoadedInput(config: .standard, problem: true)
+        }
+        let env = provider.client.environment
+        let revision = try? inputRevision(gameID: gameID, user: user)
+        var problem = revision == nil
+        var baseConfig: InputConfig?
+        if !env.library.isEmpty {
+            let relative = user == "01" ? "mappings/\(gameID).json" : "mappings/users/\(user)/\(gameID).json"
+            let path = URL(fileURLWithPath: env.library).appendingPathComponent(relative)
+            if let data = try? Data(contentsOf: path) {
+                if let config = try? JSONDecoder().decode(InputConfig.self, from: data) {
+                    baseConfig = config
+                } else {
+                    problem = true
+                }
+            }
+        }
+        if baseConfig == nil, user == "01",
+           let path = games.first(where: { $0.id == gameID })?.location.file("input.json"),
+           let data = try? Data(contentsOf: path),
+           let config = try? JSONDecoder().decode(InputConfig.self, from: data) {
+            baseConfig = config
+        }
+        if baseConfig == nil,
+           let data = try? Data(contentsOf: env.privateRoot.appendingPathComponent("default-input.json")),
+           let config = try? JSONDecoder().decode(InputConfig.self, from: data) {
+            baseConfig = config
+        }
+        var result = baseConfig ?? .standard
+        if !env.library.isEmpty {
+            let mngRel = user == "01" ? "mappings/mng/\(gameID)" : "mappings/users/\(user)/mng/\(gameID)"
+            let mngDir = URL(fileURLWithPath: env.library).appendingPathComponent(mngRel)
+            let srcURL = mngDir.appendingPathComponent("input-sources.plist")
+            let devURL = mngDir.appendingPathComponent("controller-devices.plist")
+            func document(_ url: URL, field: String) -> [Any]? {
+                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+                guard let doc = NSDictionary(contentsOf: url), doc["version"] as? Int == 1,
+                      let values = doc[field] as? [Any], values.count == 4 else {
+                    problem = true; return nil
+                }
+                return values
+            }
+            func integer(_ value: Any?) -> Int? {
+                guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+                      n.doubleValue == Double(n.intValue) else { return nil }
+                return n.intValue
+            }
+            let rawSources = document(srcURL, field: "sources")
+            let rawPorts = document(devURL, field: "ports")
+            let rawSlots = document(mngDir.appendingPathComponent("controller-slots.plist"), field: "ports")
+            let sources = rawSources?.compactMap { integer($0) }
+            let ports = rawPorts as? [[String: Any]]
+            let slots = rawSlots as? [[String: Any]]
+            if let sources, sources.count != 4 || !sources.enumerated().allSatisfy({
+                ($0.offset == 0 ? [0, 1, 2, 3, 5] : [0, 1, 2, 5]).contains($0.element)
+            }) { problem = true }
+            if rawPorts != nil {
+                if let ports {
+                    var reserved = Set<String>()
+                    for port in ports {
+                        guard let id = port["id"] as? String, let name = port["name"] as? String,
+                              name.count <= 512 else { problem = true; continue }
+                        if id != "auto" && id != "none" {
+                            if !id.hasPrefix("session:") || UUID(uuidString: String(id.dropFirst(8))) == nil ||
+                                !reserved.insert(id.lowercased()).inserted { problem = true }
+                        }
+                    }
+                } else { problem = true }
+            }
+            if rawSlots != nil && (slots == nil || !slots!.allSatisfy({
+                guard let type = integer($0["type"]) else { return false }
+                return (0...4).contains(type) && $0["layout"] is String
+            })) { problem = true }
+            // Never overlay partially validated documents or invent missing devices.
+            if !problem && (sources != nil || ports != nil || slots != nil) {
+                var players = result.players ?? [
+                    "1": result.controller ?? ControllerSelection(backend: "system", device: ""),
+                    "2": ControllerSelection(backend: "disabled", device: ""),
+                    "3": ControllerSelection(backend: "disabled", device: ""),
+                    "4": ControllerSelection(backend: "disabled", device: "")
+                ]
+                for i in 0..<4 {
+                    let key = "\(i + 1)"
+                    var selection = players[key] ?? ControllerSelection(backend: i == 0 ? "system" : "disabled")
+                    let source = sources?[i] ?? selection.source ?? (selection.backend == "disabled" ? (i == 0 ? 2 : 5) : (i == 0 ? 0 : 1))
+                    let type = slots.flatMap { integer($0[i]["type"]) }
+                        ?? selection.type ?? (selection.backend == "nspro-hid" ? 4 : 0)
+                    selection.type = type
+                    selection.source = source
+                    selection.backend = type == 4 ? "nspro-hid" : "system"
+                    if let id = ports?[i]["id"] as? String { selection.device = id == "auto" ? "" : id }
+                    players[key] = selection
+                }
+                result.players = players
+                result.controller = players["1"]
+            }
+        }
+        if revision != (try? inputRevision(gameID: gameID, user: user)) { problem = true }
+        return LoadedInput(config: result, problem: problem, revision: revision)
+    }
+
+    /// 存这款的键位（saveInput 作业）。没配游戏库不起作业；作业层拒收抛 JobFailure，message 是作业层原句。
+    func saveInput(_ config: InputConfig, gameID: String, userID: String? = nil, revision: [String: String]? = nil) async throws {
+        let user = userID ?? selectedUserID
+        guard isAdmittedInputUser(user) else {
+            throw JobClientError("所选用户不存在，请刷新用户列表。")
+        }
+        guard !provider.client.environment.library.isEmpty else { throw JobClientError(LibraryProvider.noLibraryMessage) }
+        let normalized = normalizedInputConfig(config)
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(normalized))
+        var extra: [String: Any] = ["config": object, "gameId": gameID, "userId": user]
+        if let revision { extra["inputRevision"] = revision }
+        _ = try await provider.client.perform("saveInput", extra: extra)
     }
 }

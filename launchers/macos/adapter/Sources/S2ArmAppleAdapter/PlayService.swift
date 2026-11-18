@@ -1,36 +1,111 @@
 import Foundation
 
-/// Play：交 launch 作业（作业层校验运行文件、恢复存档、拼宿主环境、起 s2arm-host 并等它退出）。
-/// 界面不碰可执行路径和环境变量；同一时刻只许一局（同旧启动器「执行位」互斥）。
+/// Each game/user pair owns one launch job. Backend locks remain authoritative
+/// across launcher processes; this registry owns only this client's handles.
 public final class PlayService {
-    private let client: JobClient
-    public private(set) var current: JobHandle?
-
-    public init(client: JobClient) {
-        self.client = client
+    public struct Session: Equatable, Sendable {
+        public let taskId: String
+        public let gameId: String
+        public let userId: String
     }
 
-    public var isRunning: Bool { current != nil }
+    private struct Entry {
+        let session: Session
+        var handle: JobHandle?
+        var stopping = false
+    }
+    private let client: JobClient
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
 
-    /// 起一局。uiLanguage：宿主内提示的语言（作业层只认 zh-Hans / en）。arguments：起局请求的附加字段（缺省没有：游戏语言跟系统、主机模式由作业层定）。已有一局在跑时拒绝。
+    public init(client: JobClient) { self.client = client }
+
+    public var sessions: [Session] {
+        lock.lock(); defer { lock.unlock() }
+        return entries.values.map(\.session).sorted { $0.taskId < $1.taskId }
+    }
+    public var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !entries.isEmpty
+    }
+    /// Compatibility for single-session callers. Never pick an arbitrary game
+    /// when several are running; controls should address taskId explicitly.
+    public var current: JobHandle? {
+        lock.lock(); defer { lock.unlock() }
+        return entries.count == 1 ? entries.values.first?.handle : nil
+    }
+
     @discardableResult
-    public func play(gameId: String, uiLanguage: String? = nil, arguments: [String: Any]? = nil,
+    public func play(gameId: String, userId: String? = nil, uiLanguage: String? = nil,
+                     arguments: [String: Any]? = nil,
                      onEvent: @escaping (JobEvent) -> Void = { _ in },
                      onFinish: @escaping (JobOutcome) -> Void = { _ in }) throws -> JobHandle {
-        guard current == nil else { throw JobClientError("已有一局在运行，请先停止。") }
         var extra = arguments ?? [:]
+        // User selection has one typed entry point, not a second unvalidated
+        // arguments override that could disagree with local pair ownership.
+        guard extra["userId"] == nil, extra["taskId"] == nil, extra["operation"] == nil,
+              userId == nil || userId!.range(of: #"^(?:0[1-9]|[1-9][0-9]{1,5})$"#, options: .regularExpression) != nil else {
+            throw JobClientError("用户选择无效，请刷新用户列表。")
+        }
+        var selected = userId ?? "01"
+        if selected == "01", let player = extra["player"] as? [String: Any],
+           let playerUser = player["user"] as? String, !playerUser.isEmpty, playerUser != "first" {
+            selected = playerUser
+        }
+        let task = UUID().uuidString.lowercased()
+        let session = Session(taskId: task, gameId: gameId, userId: selected)
+        lock.lock()
+        if entries.values.contains(where: { $0.session.gameId.lowercased() == gameId.lowercased() && $0.session.userId == selected }) {
+            lock.unlock()
+            throw JobClientError("同一游戏和用户已有一局在运行，请先停止。")
+        }
+        // Reserve before start: a fast callback may arrive before it returns.
+        entries[task] = Entry(session: session)
+        lock.unlock()
         extra["gameId"] = gameId
+        if let userId { extra["userId"] = userId }
         if let uiLanguage, !uiLanguage.isEmpty { extra["uiLanguage"] = uiLanguage }   // 照原样带，作业层认（build.py 六门之外不设宿主界面语言）
-        let handle = try client.start(operation: "launch", extra: extra, onEvent: onEvent, onFinish: { [weak self] outcome in
-            if self?.current?.id == outcome.taskId { self?.current = nil }
-            onFinish(outcome)
-        })
-        current = handle
-        return handle
+        do {
+            let handle = try client.start(operation: "launch", extra: extra, id: task, onEvent: onEvent,
+                                          onFinish: { [weak self] outcome in
+                self?.finish(task)
+                onFinish(outcome)
+            })
+            lock.lock()
+            var cancel = false
+            if var entry = entries[task] {
+                entry.handle = handle; cancel = entry.stopping
+                entries[task] = entry
+            }
+            // No entry means it already exited. Do not resurrect a finished job.
+            lock.unlock()
+            if cancel { handle.cancel() }
+            return handle
+        } catch {
+            finish(task)
+            throw error
+        }
     }
 
-    /// 停这一局：请作业停（作业层停宿主、记取消）；结局照常从 onFinish 回来。
+    private func finish(_ task: String) {
+        lock.lock(); defer { lock.unlock() }
+        entries.removeValue(forKey: task)
+    }
+
+    /// Cancellation retains pair ownership until the owned process exits.
+    public func stop(taskId: String) {
+        lock.lock()
+        guard var entry = entries[taskId], !entry.stopping else { lock.unlock(); return }
+        entry.stopping = true; entries[taskId] = entry
+        let handle = entry.handle
+        lock.unlock()
+        handle?.cancel()
+    }
+
     public func stop() {
-        current?.cancel()
+        lock.lock()
+        let task = entries.count == 1 ? entries.values.first?.session.taskId : nil
+        lock.unlock()
+        if let task { stop(taskId: task) }
     }
 }

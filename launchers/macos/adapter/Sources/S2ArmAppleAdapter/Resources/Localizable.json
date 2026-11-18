@@ -4,6 +4,10 @@
   "en": "Full-screen patch (picked for your screen ratio)"
  },
  {
+  "source": "检查本次操作的设置，选择支持的选项后重试；帧率上限支持30、60、90或120。",
+  "en": "Check the operation settings and select supported options before retrying. Frame-rate limits support 30, 60, 90, or 120."
+ },
+ {
   "source": "开发中",
   "en": "In development"
  },
@@ -4068,22 +4072,6 @@
   "en": "The backup is damaged, unsupported or contains unsafe paths. Restoration was refused."
  },
  {
-  "source": "备份里有文件校验对不上；手动恢复会跳过坏的那几个、保留当前存档里原来的，其余照常恢复。",
-  "en": "Some files in the backup failed the integrity check. A manual restore skips the damaged ones, keeps the current save's originals for them, and restores everything else."
- },
- {
-  "source": "确认之后当前存档又变了，已把当前进度另存一份恢复前副本，照常恢复。",
-  "en": "The current save changed after you confirmed. The current progress was saved as an extra pre-restore copy, and the restore continued."
- },
- {
-  "source": "备份文件 CRC 或 SHA-256 校验失败，已拒绝恢复。",
-  "en": "A backup file failed the CRC or SHA-256 check, so the restore was declined."
- },
- {
-  "source": "备份里有 {0} 个文件校验对不上（{1}），这几个不恢复、保留当前存档里原来的，其余照常恢复。",
-  "en": "{0} files in the backup failed the integrity check ({1}). Those files are not restored and the current save's originals are kept; everything else is restored."
- },
- {
   "source": "备份时间",
   "en": "Backup time"
  },
@@ -4160,16 +4148,8 @@
   "en": "The current save changed. Stop the game and check the backup again."
  },
  {
-  "source": "当前游戏存档将替换为已检查的备份。恢复前的存档会自动保留；备份属于另一款游戏时不会恢复，用户或版本不符会先提示。",
-  "en": "The current game save will be replaced with the checked backup. The save from before the restore is kept automatically; a backup from a different game won't be restored, and a user or version mismatch is shown first."
- },
- {
-  "source": "备份与当前游戏版本或更新、DLC 组合不符，仍可恢复；游戏可能读不到这份进度，恢复前的存档会自动保留一份副本。",
-  "en": "The backup doesn't match the current game version, update or DLC combination. You can still restore it; the game may not be able to read this progress. The save from before the restore is kept automatically."
- },
- {
-  "source": "备份用户与当前存档用户不符，仍可恢复；恢复后当前用户的进度会换成备份里的，恢复前的存档会自动保留一份副本。",
-  "en": "The backup's users don't match the current save's users. You can still restore it; the current user's progress will be replaced with the one in the backup. The save from before the restore is kept automatically."
+  "source": "当前游戏存档将替换为已检查的备份。恢复前的存档会自动保留；游戏、用户或版本不符时不会恢复。",
+  "en": "The current save will be replaced with the checked backup. The previous save is retained automatically. A game, user or version mismatch prevents restoration."
  },
  {
   "source": "恢复存档",
@@ -5236,6 +5216,10 @@
   "en": "Preparation continued from the unpacked game data, so this export still finishes, only a little slower. When the game library is on an APFS disk (the Mac's internal disk or an external disk formatted as APFS), exports for different platforms can share the prepared game data."
  },
  {
+  "source": "用 Xcode（免费 Apple ID 即可）或 AltStore Classic v2.3 重新签名安装这款游戏；SideStore 0.7.0 免费账号重签会丢这项权限。已装的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
+  "en": "Re-sign with Xcode (a free Apple ID works) or AltStore Classic v2.3. SideStore 0.7.0 free signing loses this entitlement; GetMoreRam can repair the App ID before reinstalling."
+ },
+ {
   "source": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
   "en": "The resource pack is already on your iPhone, so there is no need to send it again. Open S2Arm on your iPhone, choose this game, keep it in the foreground with the screen on, and it will be ready once the import finishes."
  },
@@ -5968,16 +5952,16 @@
   "en": "The environment check failed. Follow the diagnostics to check tool installation and permissions, resolve the problem, then click Recheck."
  },
  {
-  "source": "先装 Impactor：在 S2Arm 里点「打开官方页面」打开官方发布页（https://github.com/claration/impactor/releases/tag/v2.7.3），下载免安装版放到桌面，再点「重新检查」。",
-  "en": "Install Impactor first: click Open the official page in S2Arm to open the official release page (https://github.com/claration/impactor/releases/tag/v2.7.3), save the portable build to the desktop, then click Recheck."
+  "source": "先装 Impactor：在 S2Arm 里点「打开官方页面」打开官方发布页（https://github.com/claration/impactor/releases/tag/v2.7.2），下载免安装版放到桌面，再点「重新检查」。",
+  "en": "Install Impactor first: click Open the official page in S2Arm to open the official release page (https://github.com/claration/impactor/releases/tag/v2.7.2), save the portable build to the desktop, then click Recheck."
  },
  {
   "source": "S2Arm Windows 版自带的签名工具 Impactor 不在了（安装包不完整）：重新下载并完整解压 S2Arm Windows 版，用里面的 S2Arm.exe 打开后再试。",
   "en": "The Impactor signing tool that ships with S2Arm for Windows is missing (incomplete package): download S2Arm for Windows again, extract it fully, and open the S2Arm.exe inside."
  },
  {
-  "source": "换成实测过的 Impactor 2.7.3（官方发布页 https://github.com/claration/impactor/releases/tag/v2.7.3）；别的版本可能丢掉「提高内存上限」权限，大游戏会闪退。",
-  "en": "Switch to the tested Impactor 2.7.3 (official release page https://github.com/claration/impactor/releases/tag/v2.7.3); other versions may drop the increased-memory-limit entitlement and large games may crash."
+  "source": "换成实测过的 Impactor 2.7.2（官方发布页 https://github.com/claration/impactor/releases/tag/v2.7.2）；别的版本可能丢掉「提高内存上限」权限，大游戏会闪退。",
+  "en": "Switch to the tested Impactor 2.7.2 (official release page https://github.com/claration/impactor/releases/tag/v2.7.2); other versions may drop the increased-memory-limit entitlement and large games may crash."
  },
  {
   "source": "Apple ID 或密码不对：把输入法切到英文后重新登录（全角字符会被判错）；密码只发给 Apple。",
@@ -6076,26 +6060,6 @@
   "en": "Prepared files are missing or the wrong size, prepare again: {0}"
  },
  {
-  "source": "{0}，先照常启动；起不来的话重新出一次 Mac 版。",
-  "en": "{0}. Starting anyway; if the game won't start, build the Mac version again."
- },
- {
-  "source": "请求里带着已停用的旧内存布局设置（vammLayout）",
-  "en": "The request carries the retired old memory layout setting (vammLayout)"
- },
- {
-  "source": "起局前这里校验就没过：{0}",
-  "en": "Before launch, this check had already failed: {0}"
- },
- {
-  "source": "运行文件 {0} 缺失或大小不符",
-  "en": "Runtime file {0} is missing or the wrong size"
- },
- {
-  "source": "运行版本清单对不上（{0}）",
-  "en": "The runtime manifest doesn't match ({0})"
- },
- {
   "source": "准备产物校验失败，请重新准备：{0}",
   "en": "Prepared files failed verification, prepare again: {0}"
  },
@@ -6188,10 +6152,6 @@
   "en": "The S2Arm reader tool is missing or does not match the engine version. Reinstall the full S2Arm."
  },
  {
-  "source": "这款游戏的程序号（{0}）和游戏包（{1}）对不上，多半是游戏文件被改过；已按程序号放进设备，照常安装。玩不了时请用原版游戏文件重新导入。",
-  "en": "This game's program ID ({0}) doesn't match its game package ({1}), usually because the game files were modified. It was placed on the device by program ID and installed as usual. If it doesn't play, import the original game files again."
- },
- {
   "source": ".NET SDK 装完了但没找到，请查看日志。",
   "en": "The .NET SDK was installed but cannot be found. See the log."
  },
@@ -6278,18 +6238,6 @@
  {
   "source": "没找到 iPhone：插上数据线并解锁，在手机上点「信任」。",
   "en": "No iPhone found: connect the cable, unlock it and tap Trust on the phone."
- },
- {
-  "source": "这台电脑上没有这个 Apple ID 能用的开发证书，要新建一张。如果你的账号证书已满，苹果会撤掉列表里的第一张「{0}」（在 {1} 上创建，{2} 生效），用它签的 App（可能是 Xcode 或 AltStore 装的）会打不开；没满就什么都不撤。",
-  "en": "This computer has no usable development certificate for this Apple ID, so it needs to create one. If your account's certificates are full, Apple will revoke the first one in the list, “{0}” (created on {1}, valid from {2}), and apps signed with it (possibly installed by Xcode or AltStore) will stop opening; if they are not full, nothing is revoked."
- },
- {
-  "source": "这台电脑上没有这个 Apple ID 能用的开发证书，要新建一张。如果你的账号证书已满，苹果会撤掉列表里的第一张「{0}」（{1} 生效），用它签的 App（可能是 Xcode 或 AltStore 装的）会打不开；没满就什么都不撤。",
-  "en": "This computer has no usable development certificate for this Apple ID, so it needs to create one. If your account's certificates are full, Apple will revoke the first one in the list, “{0}” (valid from {1}), and apps signed with it (possibly installed by Xcode or AltStore) will stop opening; if they are not full, nothing is revoked."
- },
- {
-  "source": "点「仍然继续」就照签。想保住那一张，要先删掉一张不用的开发证书：有 Mac 的话，在 Mac 上 Xcode 的「设置 → 账户 → 管理证书」里删，删完回来再装一次。",
-  "en": "Click Continue anyway to sign. To keep that one, first delete a development certificate you no longer use: if you have a Mac, delete it in Xcode on the Mac under Settings → Accounts → Manage Certificates, then come back and install again."
  },
  {
   "source": "点「仍然继续」照传：手机报的空闲不含系统随时能清掉的空间，实际多半放得下，真写满了会停下并说明还差多少；也可以先在「设置 → 通用 → iPhone 储存空间」腾出空间。",
@@ -6382,6 +6330,10 @@
  {
   "source": "下次在 Mac 上玩之前会重新准备",
   "en": "It is prepared again before you next play on the Mac"
+ },
+ {
+  "source": "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响",
+  "en": "You will need to build again before installing on an iPhone; games already installed are not affected"
  },
  {
   "source": "统计各游戏占用的空间",
@@ -6626,10 +6578,6 @@
  {
   "source": "现有 prod.keys 缺少读取此文件所需的密钥。",
   "en": "Your prod.keys file is missing keys needed to read this file."
- },
- {
-  "source": "现有 prod.keys 解不开这份文件：解出来的数据对不上，多半是这款用的那一代密钥不对。请用升级到最新系统的 Switch 重新导出 prod.keys 再导入。",
-  "en": "Your current prod.keys can't decrypt this file: the decrypted data doesn't match, most likely because the key generation this game uses is wrong. Re-export prod.keys from a Switch updated to the latest system version, then import again."
  },
  {
   "source": "无法读取游戏内容：可能是文件不完整、缺票据或密钥不匹配。请核对原始文件；若已确认 Switch 密钥版本不足，再重新导出，到「设置 → 玩家密钥」重新导入。",
@@ -7064,10 +7012,6 @@
   "en": "Wait for the task that is using the library to finish (or cancel it in the task list), then try again. Nothing was changed."
  },
  {
-  "source": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
-  "en": "The original task process is gone, but the library lock is still held. Reconnect or remount the library drive and retry. Do not delete the lock file; no game files were changed."
- },
- {
   "source": "Apple ID 登录已过期，请重新登录后再装：在装机页点「打开 Impactor」→「设置」，选中你的 Apple ID 点「移除账号」，再点「添加账号」用同一个 Apple ID 重新登录（邮箱、密码、手机上的验证码，输入前切到英文输入法），然后回来再点一次「装到 iPhone」。密码只在 Impactor 里输，S2Arm 不经手。",
   "en": "Your Apple ID sign-in has expired. Sign in again, then install: on the install page click Open Impactor → Settings, select your Apple ID and click Remove Account, then Add Account and sign in with the same Apple ID (email, password and the code on your devices; switch the keyboard to English first). Come back and click Install to iPhone again. You enter the password only in Impactor; S2Arm never sees it."
  },
@@ -7142,6 +7086,10 @@
  {
   "source": "从电脑重新装到 iPhone，会接着已传的部分续传。",
   "en": "Install to iPhone from the computer again; it resumes from what was already sent."
+ },
+ {
+  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
+  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
  },
  {
   "source": "重新连电脑推送，会自动补齐。",
@@ -7944,10 +7892,6 @@
   "en": "Choose a dedicated folder for the library, not a whole drive or your user folder."
  },
  {
-  "source": "选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。",
-  "en": "The key file you chose can't be found (it may have been moved or deleted, or it's still in iCloud and not downloaded). Choose prod.keys again."
- },
- {
   "source": "密钥文件过大。",
   "en": "The key file is too large."
  },
@@ -8126,10 +8070,6 @@
  {
   "source": "这次装机前没能备份手机上的存档（{0}）。存档没备份，万一覆盖出问题可能丢档；确认仍然继续再点一次。",
   "en": "Couldn't back up the saves on the phone before this install ({0}). Without a backup, saves could be lost if the install goes wrong. Click again to continue anyway."
- },
- {
-  "source": "iPhone 锁着，读不了存档：请解锁手机，解锁后会自动继续",
-  "en": "The iPhone is locked, so its saves can't be read. Unlock the phone and this will continue automatically"
  },
  {
   "source": "读不懂 iPhone 返回的存档文件清单（{0} 条没有路径字段，多半是 Xcode 版本不同）",
@@ -9116,12 +9056,8 @@
   "en": "Couldn't download {0}'s package: {1}. Check your network and try again."
  },
  {
-  "source": "{0} 的包件内容和登记的不一致（提交 {1}），重新下载后还是不对：没有用它。",
-  "en": "The {0} package doesn't match its registered contents (commit {1}), even after downloading it again, so it wasn't used."
- },
- {
-  "source": "{0} 的包件解不开，重新下载后还是不对：没有用它。",
-  "en": "The {0} package couldn't be extracted, even after downloading it again, so it wasn't used."
+  "source": "{0} 的包件内容和登记的不一致（提交 {1}）：没有用它。",
+  "en": "{0}'s package doesn't match its registration (commit {1}), so it wasn't used."
  },
  {
   "source": "解包出的游戏程序 {0} 不是 {1} 要的那一版（{2}），做不出来。导入 {3} 更新后再导出。",
@@ -9302,6 +9238,10 @@
  {
   "source": "没有 .NET 10 SDK：{0}",
   "en": ".NET 10 SDK not found: {0}"
+ },
+ {
+  "source": "这份 S2Arm 没装完整：程序的两部分来自不同版本（多半是应用内更新中途失败、回滚没退干净）。请从发布页下载最新的安装包，覆盖安装一次（游戏库、存档、密钥都在别处，不受影响），再出包。",
+  "en": "This S2Arm isn't fully installed: two parts of the program are from different versions (usually an in-app update failed midway and didn't roll back cleanly). Download the latest installer from the release page and install over it (the library, saves and keys are stored elsewhere and won't be affected), then build again."
  },
  {
   "source": "【黄】原始程序没存下（以后升级要回原件）：{0}",
@@ -9600,10 +9540,6 @@
   "en": "single IMG {0}"
  },
  {
-  "source": "读不到 Impactor 里登录的 Apple ID：在 Impactor 里登录后再导出，或者这次改成「自己用别的工具签」。",
-  "en": "Couldn't read the Apple ID signed in to Impactor. Sign in to Impactor and export again, or switch this export to “Sign it myself with another tool”."
- },
- {
   "source": "单一 IMG 边写边腾解包、不另占",
   "en": "single IMG written while freeing the unpacked files, no extra space"
  },
@@ -9804,12 +9740,236 @@
   "en": "This archive is larger than 16 GB when extracted: {0}"
  },
  {
+  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
+  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
+ },
+ {
+  "source": "「{0}」是空的，没收",
+  "en": "\"{0}\" is empty, skipped"
+ },
+ {
+  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
+  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
+ },
+ {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
   "en": "The NUP's title ID {0} doesn't match the library's {0}"
  },
  {
   "source": "mod 开关格式不对。",
   "en": "Invalid mod switch request."
+ },
+ {
+  "source": "重试没用：先在游戏菜单「存档管理」里导出存档（存到 S2Arm 文件夹以外，比如 iCloud 云盘），再删除并重新安装 S2Arm，装好后导回存档。",
+  "en": "Retrying won’t help: export your saves from the game menu (Manage saves) to a place outside the S2Arm folder, such as iCloud Drive, delete and reinstall S2Arm, then import the saves again."
+ },
+ {
+  "source": "显卡卡住了，S2Arm 把这局安全停下了。",
+  "en": "The GPU hung, so S2Arm stopped this session safely."
+ },
+ {
+  "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
+  "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
+ },
+ {
+  "source": "读不到 Impactor 当前选中的 Apple ID：在 Impactor 里登录并选中你的 Apple ID 后再装。",
+  "en": "Can't read the Apple ID selected in Impactor: sign in to Impactor, select your Apple ID, then install again."
+ },
+ {
+  "source": "写进 App 要申请的权限",
+  "en": "Adding the permissions the app requests"
+ },
+ {
+  "source": "这款选的下游方案是独立 App，资源要由电脑推进去：连上手机后点「装到 iPhone」；想导出自签包就在确认页改选「仍用原版方案」。",
+  "en": "The port chosen for this game is a separate app whose resources are copied over from your computer: connect your phone and click Install on iPhone. To export a self-sign package instead, choose Keep the standard route on the confirmation page."
+ },
+ {
+  "source": "这款用的是 {0} 方案（独立 App），现在只能「装到 iPhone」，还不能导出自签包。",
+  "en": "This game uses {0} (a separate app): for now it can only be installed with Install on iPhone, not exported as a self-sign package."
+ },
+ {
+  "source": "下游方案只能装到 iPhone",
+  "en": "This port can only be installed on iPhone"
+ },
+ {
+  "source": "这款选了下游深度方案（独立 App），它的资源要由电脑推进手机，导出的自签包里装不下。",
+  "en": "This game uses a dedicated port (a separate app). Its resources are copied to the phone from your computer, so they can't go into an exported self-sign package."
+ },
+ {
+  "source": "先同步并核实手机宿主版本；不要卸载 App 或重传游戏资源。设备解锁后重试，仍失败时保留诊断。",
+  "en": "Synchronize and verify the iPhone host first. Do not uninstall the app or resend game resources. Unlock the device and retry; retain diagnostics if verification still fails."
+ },
+ {
+  "source": "更新 Mac 的 iOS 宿主组件后重试；当前手机 App、资源和存档均未改动。",
+  "en": "Update the iOS host components on your Mac and retry. The iPhone app, resources and saves have not been changed."
+ },
+ {
+  "source": "同一游戏和用户已有一局在运行，请先停止。",
+  "en": "This game is already running for this user. Stop that session first."
+ },
+ {
+  "source": "用户选择无效，请刷新用户列表。",
+  "en": "Invalid user selection. Refresh the user list."
+ },
+ {
+  "source": "用户资料无效，请刷新用户列表；没有更改所选用户。",
+  "en": "Invalid user information. Refresh the user list; the selected user was not changed."
+ },
+ {
+  "source": "用户列表已变化，请刷新后重试。",
+  "en": "The user list has changed. Refresh it and try again."
+ },
+ {
+  "source": "先单独安装／更新／续签手机 App，再推送资源；推送不会自动重装已有 App。",
+  "en": "Install, update or renew the phone app separately before sending resources. Resource delivery never automatically reinstalls an existing app."
+ },
+ {
+  "source": "S2Arm 读取器未通过游戏内容哈希校验；仅凭此错误不能确定源文件损坏。",
+  "en": "The S2Arm reader failed content hash verification; this error alone does not establish that the source file is damaged."
+ },
+ {
+  "source": "若同一文件在其他模拟器可正常使用，请保留本次日志以排查读取器兼容性与校验策略差异；不要仅据此更换密钥或认定文件损坏。",
+  "en": "If the same file works in another emulator, keep this log to investigate reader compatibility and integrity policy differences. Do not replace keys or conclude that the file is damaged based on this error alone."
+ },
+ {
+  "source": "密钥已导入；如需更新，可重新导入。",
+  "en": "Keys imported. You can import them again to update them."
+ },
+ {
+  "source": "尚未确认密钥状态；可导入自行导出的 prod.keys。",
+  "en": "Key status is not confirmed. You can import your own prod.keys dump."
+ },
+ {
+  "source": "Mac帧率上限",
+  "en": "Mac frame rate limit"
+ },
+ {
+  "source": "未设置上限",
+  "en": "No limit selected"
+ },
+ {
+  "source": "下次启动生效；不解除游戏自身锁帧，不开启60帧补丁。",
+  "en": "Applies on next launch. Does not unlock the game frame rate or enable a 60 FPS patch."
+ },
+ {
+  "source": "帧率上限只能选择30、60、90或120。",
+  "en": "Choose a frame rate limit of 30, 60, 90, or 120."
+ },
+ {
+  "source": "此运行宿主尚未确认支持90帧，请先更新游戏运行组件；没有启动游戏。",
+  "en": "This runtime has not been confirmed to support 90 FPS. Update the game runtime first. The game was not started."
+ },
+ {
+  "source": "无法核对当前游戏资源的帧率安全记录，请更新运行组件或重新准备游戏；没有启动游戏。",
+  "en": "Unable to verify frame rate safety records for these game resources. Update the runtime or prepare the game again. The game was not started."
+ },
+ {
+  "source": "当前构建有帧率安全记录：本次关闭60帧解锁，保留游戏原生节拍；未修改游戏资源或存档。",
+  "en": "This build has a frame rate safety record: 60 FPS unlocking is disabled for this launch, preserving native game timing. Game resources and saves were not modified."
+ },
+ {
+  "source": "帧率能力文件不能是符号链接。",
+  "en": "The frame rate capability file must not be a symbolic link."
+ },
+ {
+  "source": "备份里有文件校验对不上；手动恢复会跳过坏的那几个、保留当前存档里原来的，其余照常恢复。",
+  "en": "Some files in the backup failed the integrity check. A manual restore skips the damaged ones, keeps the current save's originals for them, and restores everything else."
+ },
+ {
+  "source": "确认之后当前存档又变了，已把当前进度另存一份恢复前副本，照常恢复。",
+  "en": "The current save changed after you confirmed. The current progress was saved as an extra pre-restore copy, and the restore continued."
+ },
+ {
+  "source": "备份文件 CRC 或 SHA-256 校验失败，已拒绝恢复。",
+  "en": "A backup file failed the CRC or SHA-256 check, so the restore was declined."
+ },
+ {
+  "source": "备份里有 {0} 个文件校验对不上（{1}），这几个不恢复、保留当前存档里原来的，其余照常恢复。",
+  "en": "{0} files in the backup failed the integrity check ({1}). Those files are not restored and the current save's originals are kept; everything else is restored."
+ },
+ {
+  "source": "当前游戏存档将替换为已检查的备份。恢复前的存档会自动保留；备份属于另一款游戏时不会恢复，用户或版本不符会先提示。",
+  "en": "The current game save will be replaced with the checked backup. The save from before the restore is kept automatically; a backup from a different game won't be restored, and a user or version mismatch is shown first."
+ },
+ {
+  "source": "备份与当前游戏版本或更新、DLC 组合不符，仍可恢复；游戏可能读不到这份进度，恢复前的存档会自动保留一份副本。",
+  "en": "The backup doesn't match the current game version, update or DLC combination. You can still restore it; the game may not be able to read this progress. The save from before the restore is kept automatically."
+ },
+ {
+  "source": "备份用户与当前存档用户不符，仍可恢复；恢复后当前用户的进度会换成备份里的，恢复前的存档会自动保留一份副本。",
+  "en": "The backup's users don't match the current save's users. You can still restore it; the current user's progress will be replaced with the one in the backup. The save from before the restore is kept automatically."
+ },
+ {
+  "source": "先装 Impactor：在 S2Arm 里点「打开官方页面」打开官方发布页（https://github.com/claration/impactor/releases/tag/v2.7.3），下载免安装版放到桌面，再点「重新检查」。",
+  "en": "Install Impactor first: click Open the official page in S2Arm to open the official release page (https://github.com/claration/impactor/releases/tag/v2.7.3), save the portable build to the desktop, then click Recheck."
+ },
+ {
+  "source": "换成实测过的 Impactor 2.7.3（官方发布页 https://github.com/claration/impactor/releases/tag/v2.7.3）；别的版本可能丢掉「提高内存上限」权限，大游戏会闪退。",
+  "en": "Switch to the tested Impactor 2.7.3 (official release page https://github.com/claration/impactor/releases/tag/v2.7.3); other versions may drop the increased-memory-limit entitlement and large games may crash."
+ },
+ {
+  "source": "{0}，先照常启动；起不来的话重新出一次 Mac 版。",
+  "en": "{0}. Starting anyway; if the game won't start, build the Mac version again."
+ },
+ {
+  "source": "请求里带着已停用的旧内存布局设置（vammLayout）",
+  "en": "The request carries the retired old memory layout setting (vammLayout)"
+ },
+ {
+  "source": "起局前这里校验就没过：{0}",
+  "en": "Before launch, this check had already failed: {0}"
+ },
+ {
+  "source": "运行文件 {0} 缺失或大小不符",
+  "en": "Runtime file {0} is missing or the wrong size"
+ },
+ {
+  "source": "运行版本清单对不上（{0}）",
+  "en": "The runtime manifest doesn't match ({0})"
+ },
+ {
+  "source": "这款游戏的程序号（{0}）和游戏包（{1}）对不上，多半是游戏文件被改过；已按程序号放进设备，照常安装。玩不了时请用原版游戏文件重新导入。",
+  "en": "This game's program ID ({0}) doesn't match its game package ({1}), usually because the game files were modified. It was placed on the device by program ID and installed as usual. If it doesn't play, import the original game files again."
+ },
+ {
+  "source": "这台电脑上没有这个 Apple ID 能用的开发证书，要新建一张。如果你的账号证书已满，苹果会撤掉列表里的第一张「{0}」（在 {1} 上创建，{2} 生效），用它签的 App（可能是 Xcode 或 AltStore 装的）会打不开；没满就什么都不撤。",
+  "en": "This computer has no usable development certificate for this Apple ID, so it needs to create one. If your account's certificates are full, Apple will revoke the first one in the list, “{0}” (created on {1}, valid from {2}), and apps signed with it (possibly installed by Xcode or AltStore) will stop opening; if they are not full, nothing is revoked."
+ },
+ {
+  "source": "这台电脑上没有这个 Apple ID 能用的开发证书，要新建一张。如果你的账号证书已满，苹果会撤掉列表里的第一张「{0}」（{1} 生效），用它签的 App（可能是 Xcode 或 AltStore 装的）会打不开；没满就什么都不撤。",
+  "en": "This computer has no usable development certificate for this Apple ID, so it needs to create one. If your account's certificates are full, Apple will revoke the first one in the list, “{0}” (valid from {1}), and apps signed with it (possibly installed by Xcode or AltStore) will stop opening; if they are not full, nothing is revoked."
+ },
+ {
+  "source": "点「仍然继续」就照签。想保住那一张，要先删掉一张不用的开发证书：有 Mac 的话，在 Mac 上 Xcode 的「设置 → 账户 → 管理证书」里删，删完回来再装一次。",
+  "en": "Click Continue anyway to sign. To keep that one, first delete a development certificate you no longer use: if you have a Mac, delete it in Xcode on the Mac under Settings → Accounts → Manage Certificates, then come back and install again."
+ },
+ {
+  "source": "现有 prod.keys 解不开这份文件：解出来的数据对不上，多半是这款用的那一代密钥不对。请用升级到最新系统的 Switch 重新导出 prod.keys 再导入。",
+  "en": "Your current prod.keys can't decrypt this file: the decrypted data doesn't match, most likely because the key generation this game uses is wrong. Re-export prod.keys from a Switch updated to the latest system version, then import again."
+ },
+ {
+  "source": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
+  "en": "The original task process is gone, but the library lock is still held. Reconnect or remount the library drive and retry. Do not delete the lock file; no game files were changed."
+ },
+ {
+  "source": "选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。",
+  "en": "The key file you chose can't be found (it may have been moved or deleted, or it's still in iCloud and not downloaded). Choose prod.keys again."
+ },
+ {
+  "source": "iPhone 锁着，读不了存档：请解锁手机，解锁后会自动继续",
+  "en": "The iPhone is locked, so its saves can't be read. Unlock the phone and this will continue automatically"
+ },
+ {
+  "source": "{0} 的包件内容和登记的不一致（提交 {1}），重新下载后还是不对：没有用它。",
+  "en": "The {0} package doesn't match its registered contents (commit {1}), even after downloading it again, so it wasn't used."
+ },
+ {
+  "source": "{0} 的包件解不开，重新下载后还是不对：没有用它。",
+  "en": "The {0} package couldn't be extracted, even after downloading it again, so it wasn't used."
+ },
+ {
+  "source": "读不到 Impactor 里登录的 Apple ID：在 Impactor 里登录后再导出，或者这次改成「自己用别的工具签」。",
+  "en": "Couldn't read the Apple ID signed in to Impactor. Sign in to Impactor and export again, or switch this export to “Sign it myself with another tool”."
  },
  {
   "source": "iPhone 上的 S2Arm 写不进 {0}，也删不掉它（{1}；删除：{2}）。{3}",
@@ -9904,48 +10064,8 @@
   "en": "This game has no RomFS, so no texture conversion is needed for Apple TV"
  },
  {
-  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
-  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
- },
- {
   "source": "「{0}」是整份替换游戏程序的 mod，S2Arm 不支持：S2Arm 出包时要改写游戏程序，只能把 exefs/ 里的 pchtxt / IPS 补丁编进去；资源替换类（romfs/）照常能用。",
   "en": "\"{0}\" replaces the whole game program, which S2Arm does not support: S2Arm rewrites the game program when packing, so only pchtxt / IPS patches in exefs/ can be built in. Asset mods (romfs/) still work."
- },
- {
-  "source": "「{0}」是空的，没收",
-  "en": "\"{0}\" is empty, skipped"
- },
- {
-  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
-  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
- },
- {
-  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
-  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
- },
- {
-  "source": "读不到 Impactor 当前选中的 Apple ID：在 Impactor 里登录并选中你的 Apple ID 后再装。",
-  "en": "Can't read the Apple ID selected in Impactor: sign in to Impactor, select your Apple ID, then install again."
- },
- {
-  "source": "写进 App 要申请的权限",
-  "en": "Adding the permissions the app requests"
- },
- {
-  "source": "这款选的下游方案是独立 App，资源要由电脑推进去：连上手机后点「装到 iPhone」；想导出自签包就在确认页改选「仍用原版方案」。",
-  "en": "The port chosen for this game is a separate app whose resources are copied over from your computer: connect your phone and click Install on iPhone. To export a self-sign package instead, choose Keep the standard route on the confirmation page."
- },
- {
-  "source": "这款用的是 {0} 方案（独立 App），现在只能「装到 iPhone」，还不能导出自签包。",
-  "en": "This game uses {0} (a separate app): for now it can only be installed with Install on iPhone, not exported as a self-sign package."
- },
- {
-  "source": "下游方案只能装到 iPhone",
-  "en": "This port can only be installed on iPhone"
- },
- {
-  "source": "这款选了下游深度方案（独立 App），它的资源要由电脑推进手机，导出的自签包里装不下。",
-  "en": "This game uses a dedicated port (a separate app). Its resources are copied to the phone from your computer, so they can't go into an exported self-sign package."
  },
  {
   "source": "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包",

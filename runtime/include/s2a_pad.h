@@ -81,7 +81,7 @@ typedef struct {
 void s2a_pad_record_commit(const s2a_pad_snapshot *snapshot);
 void s2a_pad_get_latency(s2a_pad_latency *out, int reset);
 
-// iOS 可选导出：游戏侧按符号查询，其他宿主不必提供。
+// 可选导出（iOS，以及 Mac NS Pro HID 运动）：游戏侧按符号查询，其他宿主不必提供。
 // 运动保持 NS2 原始坐标，单位 g、度/秒；单调接收时间，结构体 32 字节。
 typedef struct {
     uint64_t host_timestamp_us;
@@ -94,6 +94,7 @@ typedef struct {
     float low_amp, low_hz, high_amp, high_hz;
 } s2a_pad_vibration;
 void s2a_pad_set_rumble_pair(uint64_t session, const s2a_pad_vibration values[2]);
+void s2a_pad_set_player_rumble_pair(uint64_t session, unsigned player, const s2a_pad_vibration values[2]);
 void s2a_pad_set_rumble(uint64_t session, unsigned side, float low_amp, float low_hz, float high_amp, float high_hz);
 void s2a_pad_stop_rumble(uint64_t session);
 void s2a_pad_set_motion_enabled(int enabled);

@@ -11,6 +11,7 @@
 不兼容时照用原来的宿主，catalog 报 hostUpdate = "incompatible"，游戏库提示重新准备。
 """
 from __future__ import annotations
+import hashlib
 import json
 import os
 import re
@@ -20,6 +21,7 @@ import subprocess
 import time
 import math
 import sys
+import tempfile
 from pathlib import Path
 
 import layout
@@ -37,6 +39,7 @@ def _host_abi():
 
 
 HOST_ABI = _host_abi()
+ABI = HOST_ABI
 TRIAL_OK_SECONDS = 60
 APP = "S2ArmGame.app"
 EXE = APP + "/Contents/MacOS/s2arm-host"
@@ -430,3 +433,79 @@ def prune(c):
     for d in root.iterdir():
         if d.is_dir() and not d.is_symlink() and d.name not in keep:
             shutil.rmtree(d, ignore_errors=True)
+
+
+def verify_signature(app):
+    for target in (app / "Contents/MacOS/libs2a_vaguard.dylib", app):
+        result = subprocess.run(["codesign", "--verify", "--strict", str(target)], capture_output=True)
+        if result.returncode:
+            raise Failure("运行组件签名校验失败，请重新安装完整 S2Arm。", code="runtime_invalid")
+
+
+def validate_host(c, app, files):
+    from build import validate_files
+    # A directory symlink can redirect copy destinations even when each leaf
+    # is a regular file. Host publications must be a real directory closure.
+    if app.is_symlink():
+        raise Failure("运行组件包含符号链接。", code="runtime_invalid")
+    for name in files:
+        current = app
+        for part in name.split("/"):
+            current = current / part
+            if current.is_symlink():
+                raise Failure("运行组件包含符号链接。", code="runtime_invalid")
+    validate_files(c, app, files, full=True)
+    verify_signature(app)
+
+
+def current_host(c, game_manifest):
+    if not c.r.get("engineBundle"):
+        return None
+    engine = read(c.engine / "engine.json", {})
+    abi = engine.get("runtimeHostABI")
+    if abi is None:
+        return None  # Older launcher bundles did not declare this contract.
+    game_abi = game_manifest.get("runtimeHostABI", ABI if game_manifest.get("memoryRequirementsVersion") == 2 else None)
+    if abi != ABI or game_abi != abi:
+        raise Failure("新版运行组件与这款游戏的产物接口不兼容，需要重新准备游戏。", code="runtime_invalid")
+    prefix = "Binaries/S2ArmGame.app/"
+    from build import validate_file_manifest
+    engine_files = engine.get("files")
+    validate_file_manifest(engine_files)
+    files = {name[len(prefix):]: value for name, value in engine_files.items() if name.startswith(prefix)}
+    validate_file_manifest(files)
+    required = {"Contents/MacOS/s2arm-host", "Contents/MacOS/libs2a_vaguard.dylib", "Contents/Info.plist"}
+    if not required.issubset(files):
+        raise Failure("内置运行组件清单不完整。", code="runtime_invalid")
+    identity = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    parent = c.private / "runtime-hosts"
+    destination = parent / identity / "S2ArmGame.app"
+    if parent.is_symlink() or destination.parent.is_symlink() or destination.is_symlink():
+        raise Failure("运行组件缓存不能是符号链接。", code="runtime_invalid")
+    if destination.exists():
+        validate_host(c, destination, files)
+        return destination
+    source = c.engine / "Binaries/S2ArmGame.app"
+    validate_host(c, source, files)
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=".publish-", dir=parent))
+    try:
+        candidate = temporary / "S2ArmGame.app"
+        # Copy exactly the signed manifest closure, never game data or symlinks.
+        for name in files:
+            target = candidate / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / name, target)
+        validate_host(c, candidate, files)
+        c.check()
+        try:
+            temporary.rename(destination.parent)
+        except OSError:
+            if not destination.exists():
+                raise
+            validate_host(c, destination, files)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    c.emit("message", "已更新通用运行组件；游戏资源和着色器无需重新准备。")
+    return destination

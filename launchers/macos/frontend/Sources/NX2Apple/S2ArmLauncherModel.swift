@@ -63,11 +63,13 @@ enum ExportBlocker: Equatable {
     var stopsStart: Bool { switch self { case .game, .keys: return false; default: return true } }
 }
 
-/// 正在跑 / 刚结束的一个作业（一局、出包、准备运行、装到 iPhone、导入、一键处理环境、换游戏库）。同一时刻只有一个（同旧启动器「执行位」互斥）。
+/// 正在跑 / 刚结束的作业状态。游玩按用户分开记录 playSessions，后台任务使用 session；冲突由后端按游戏和操作加锁。
 struct JobSession: Equatable {
-    enum Kind: String, CaseIterable { case play, export, prepare, install, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
-                        keys, delete, diagnostics, moveGame, clearCache, installTV = "tvInstall", exportTV = "tvExport", pushSelected }
+    enum Kind: String, CaseIterable { case play, export, prepare, install, installHost, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
+                        keys, delete, diagnostics, moveGame, clearCache, verify, installTV = "tvInstall", exportTV = "tvExport", pushSelected }
     enum Phase: Equatable { case running, stopping, finished(JobOutcome.State) }
+    /// UI operation identity; a multi-platform export can own several worker task IDs.
+    let id = UUID()
     let kind: Kind
     let gameID: String?
     let name: String
@@ -95,7 +97,7 @@ struct JobSession: Equatable {
     /// 走过的阶段（阶段事件的作业层原句，按出现顺序、不重复）：手机作业进行中页的步骤列表
     var stages: [String] = []
     /// 手机作业（装到手机 / 续签、删除、装回、更新手机上的 S2Arm）：结局页统一用 PhoneJobPanel
-    var isPhoneJob: Bool { [.install, .installRemove, .installRestore, .installUpdate, .pushSelected].contains(kind) }
+    var isPhoneJob: Bool { [.install, .installHost, .installRemove, .installRestore, .installUpdate, .pushSelected].contains(kind) }
 }
 
 /// 手机作业做完后结局页要说的事实（从作业结果读，不猜）：装到哪台、这次推了多少、哪几款被跳过
@@ -122,15 +124,91 @@ struct PhoneOutcome: Equatable {
 }
 
 /// 排队的一次出包。
-struct QueuedExport {
+struct QueuedExport: Identifiable, Equatable {
+    let id: UUID
     let game: GameSummary
-    let platforms: [ExportPlatform]
+    var platforms: [ExportPlatform]
     let target: [String: Any]?
     let spaceOverride: Bool
     /// 存放位置（游戏库结构 v3）：nil = 这款现在的位置 / 上次用的位置（后端定）
     var location: String? = nil
     /// "export" = 这次出包是为了导出自签包（作业层步骤名照自签路写）
     var mode: String? = nil
+
+    init(
+        id: UUID = UUID(),
+        game: GameSummary,
+        platforms: [ExportPlatform],
+        target: [String: Any]?,
+        spaceOverride: Bool,
+        location: String? = nil,
+        mode: String? = nil
+    ) {
+        self.id = id
+        self.game = game
+        self.platforms = platforms
+        self.target = target
+        self.spaceOverride = spaceOverride
+        self.location = location
+        self.mode = mode
+    }
+
+    static func == (lhs: QueuedExport, rhs: QueuedExport) -> Bool {
+        lhs.id == rhs.id && lhs.game.id == rhs.game.id && lhs.platforms == rhs.platforms && lhs.spaceOverride == rhs.spaceOverride && lhs.location == rhs.location && lhs.mode == rhs.mode
+    }
+}
+
+/// 排队的一次手机装机 / 推送 / 续签 / 移除任务。
+struct QueuedPhoneJob: Identifiable, Equatable {
+    let id: UUID
+    let kind: JobSession.Kind
+    let game: GameSummary
+    var gameID: String? { game.id.isEmpty ? nil : game.id }
+    let teamId: String?
+    let confirmation: String?
+    let device: String?
+    let accept: Set<String>
+    let ask: Bool
+    let export: Bool
+    let customRun: (() -> Void)?
+
+    init(
+        id: UUID = UUID(),
+        kind: JobSession.Kind,
+        game: GameSummary,
+        teamId: String? = nil,
+        confirmation: String? = nil,
+        device: String? = nil,
+        accept: Set<String> = [],
+        ask: Bool = true,
+        export: Bool = false,
+        customRun: (() -> Void)? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.game = game
+        self.teamId = teamId
+        self.confirmation = confirmation
+        self.device = device
+        self.accept = accept
+        self.ask = ask
+        self.export = export
+        self.customRun = customRun
+    }
+
+    static func == (lhs: QueuedPhoneJob, rhs: QueuedPhoneJob) -> Bool {
+        lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.game.id == rhs.game.id
+    }
+
+    var conflictIntent: OperationIntent {
+        let op: OperationIntent.Kind
+        switch kind {
+        case .installHost: op = .installHost
+        case .installRemove: op = .removeFromPhone
+        default: op = .transfer
+        }
+        return OperationIntent(kind: op, gameID: game.id)
+    }
 }
 
 /// 这次出包要占多少、盘上还有多少（只取游戏库所在的卷）。
@@ -153,6 +231,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     let home = HomeLibraryState()
     let gamepad = LauncherPadNavigation()
     var playSessionActive: Bool {
+        if hasRunningGames { return true }
         guard let session, session.kind == .play else { return false }
         if case .finished = session.phase { return false }
         return true
@@ -170,18 +249,48 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 出包平台的勾选没能写盘。
     @Published private(set) var choiceError: String?
     @Published var session: JobSession? {   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
-        didSet { if session?.started != oldValue?.started { sessionHidden = false } }
+        didSet { if session?.id != oldValue?.id || session?.started != oldValue?.started { sessionHidden = false } }
     }
-    /// 手机作业（装到 iPhone / 导出自签包 / 从手机删 / 装回上一版 / 更新 iPhone 上的 S2Arm）单独一个槽（11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，
-    ///   这个控制纯属多余，要放开」）：出包、一局、导入等别的作业照跑，手机作业同时跑。手机槽同一时刻一个作业，忙时再点的排队（phoneQueue），
-    ///   要装的那款正被主槽占着（出包 / 删除 / 清缓存…）也排队，主槽那单结束接着装
+    struct PlaySession: Identifiable, Equatable {
+        let id: UUID
+        let user: LauncherUser
+        var job: JobSession
+        var running: RunningGame?
+    }
+    @Published private(set) var playSessions: [PlaySession] = []
+    @Published var saveOperations: [UUID: OperationIntent] = [:]
+    // Compatibility state only when there is exactly one session; never choose
+    // an arbitrary task for old consumers.
+    var playSession: JobSession? { playSessions.count == 1 ? playSessions.first?.job : nil }
+    @Published private(set) var userRegistry: UserRegistry?
+    @Published var selectedUserID = "01"
+    @Published private(set) var usersBusy = false
+    @Published private(set) var usersError: String?
+    @Published var showUsers = false
+    var selectedUser: LauncherUser? { userRegistry?.users.first { $0.id == selectedUserID } }
+
+    func loadUsers() async {
+        guard !usersBusy else { return }
+        usersBusy = true; defer { usersBusy = false }
+        do { userRegistry = try await provider.users.list(); usersError = nil }
+        catch { usersError = error.localizedDescription }
+    }
+
+    func updateUser(id: String? = nil, name: String) async {
+        guard !usersBusy, let registry = userRegistry else { return }
+        usersBusy = true; defer { usersBusy = false }
+        do {
+            if let id { userRegistry = try await provider.users.rename(id: id, name: name, revision: registry.revision) }
+            else { userRegistry = try await provider.users.create(name: name, revision: registry.revision) }
+            usersError = nil
+        } catch { usersError = error.localizedDescription }
+    }
+    /// 手机作业（装到 iPhone / 导出自签包 / 从手机删 / 装回上一版 / 更新 iPhone 上的 S2Arm）单独一个槽
     @Published var phoneSession: JobSession? {
         didSet { if phoneSession?.started != oldValue?.started { phoneHidden = false } }
     }
     /// 「更新 iPhone 上的 S2Arm」的进度页收起了（回游戏库；顶栏留入口）
     @Published var phoneHidden = false
-    /// 手机槽排着的作业（按点的先后）：gameID = 它要用的那款（更新 iPhone 为 nil）；手机槽空、且那款不被主槽占着时起
-    @Published var phoneQueue: [(gameID: String?, run: () -> Void)] = []
     /// 这款的手机作业排着队（手机槽前一个还没完 / 这款正在出包，出完接着装）：装机窗显示「已排队」，按钮不重复排
     func phoneQueued(_ gameID: String) -> Bool { phoneQueue.contains { $0.gameID == gameID } || installAfterQueue.contains(gameID) }
     /// 出包页开着的那一款（nil = 游戏库）。
@@ -307,7 +416,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var phoneResult: (gameID: String, name: String, ok: Bool)?
     /// 控制口 /show install：打开这款的装机窗（同点顶栏「查看结果」/ 游戏的「装到 iPhone」）；界面接到后清空
     @Published var showInstallFor: String?
-    static let phoneKinds: Set<JobSession.Kind> = [.install, .installRemove, .installRestore]
+    static let phoneKinds: Set<JobSession.Kind> = [.install, .installHost, .installRemove, .installRestore]
     /// 连着的手机、可选机型（出包页用）；玩家选的机型（productType）。
     @Published private(set) var connectedDevices: [[String: Any]] = []
     @Published private(set) var targetModels: [[String: Any]] = []
@@ -318,8 +427,9 @@ public final class S2ArmLauncherModel: ObservableObject {
         didSet { UserDefaults.standard.set(chosenDevice, forKey: Self.exportDeviceKey) }
     }
     static let exportDeviceKey = "S2AExportDevice"
-    /// 排队等着出的；运行页被收起（后台继续）；本次打开以来每款最近一次的出包结果；正在查看的结果。
+    /// 排队等着出的；排队等着往手机装/推的；运行页被收起（后台继续）；本次打开以来每款最近一次的出包结果；正在查看的结果。
     @Published private(set) var exportQueue: [QueuedExport] = []
+    @Published var phoneQueue: [QueuedPhoneJob] = []
     /// 批量出包（v0.2.4，S2ArmLauncherModel+Batch.swift）：清单页开着；出包前每款的勾选行；一批共用的存放位置；
     ///   后端批次（pack/jobs/batch.py show 的结果，出包中途关掉启动器也在）；这批是不是正在一款接一款地出；放进来但认不出的
     @Published var batchShown = false
@@ -364,7 +474,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             Task { @MainActor in self?.lockWaitNote = note }
         }
     }
-    @Published private(set) var customizeError: String?
+    @Published private(set) var customizingError: String?
+    var customizeError: String? { get { customizingError } set { customizingError = newValue } }
     @Published private(set) var installChecking = false
     /// 当前这份装机前清单是给哪台设备查的（控制口 GET /state 的 installReadiness.checkedDevice）：换了设备先清掉旧清单，
     ///   s2armctl install-check --device 等到这台的结果才读（11-11 真机验收：连查两台，第二台读到了第一台的清单）
@@ -407,6 +518,10 @@ public final class S2ArmLauncherModel: ObservableObject {
     ///   那一次读失败（首次使用还没选游戏库、外置游戏库没挂上）时原先整个启动器开着期间都不开（11-16 第 3 份候选 Mac 整链：等 6 分钟一单 phoneKeptPull 都没发）
     private(set) var startupLoopsStarted = false
     private var controllerGameStarted = false
+    /// Ownership is independent of whichever result is displayed. Keep the
+    /// single-background admission gate until backend/product locks are audited.
+    @Published private(set) var backgroundOperations: [UUID: OperationIntent] = [:]
+    private var backgroundWork: [UUID: Task<Void, Never>] = [:]
     /// 导入后排着等准备的游戏（同旧启动器：放进来就自动准备，维护者 10-23 不让玩家选）。
     private static let logLimit = 200
 
@@ -425,18 +540,49 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     var selected: GameSummary? { games.first { $0.id == selectedID } ?? games.first }
-    /// 有作业在跑（一局、准备、出包、装机……，两个槽任一）：没放开的动作照旧先不让点。
     var busy: Bool { mainBusy || phoneBusy }
-    /// 主槽（出包、一局、导入、删除…）有作业在跑
-    var mainBusy: Bool { if let session, case .finished = session.phase { return false }; return session != nil }
-    /// 手机槽有作业在跑
-    var phoneBusy: Bool { if let phoneSession, case .finished = phoneSession.phase { return false }; return phoneSession != nil }
-    /// 这款正被主槽占着（正在出包 / 删除 / 清缓存 / 玩…）：对它的手机作业要等主槽这单结束
+    /// 后台作业占用状态，不包含独立的游玩会话或手机传输作业。
+    var mainBusy: Bool {
+        if let s = session, s.kind != .play, !isFinished(s) { return true }
+        return backgroundOperations.contains { id, _ in phoneSession?.id != id }
+    }
+    var phoneBusy: Bool {
+        if let p = phoneSession, !isFinished(p) { return true }
+        return false
+    }
     func mainHolds(_ gameID: String?) -> Bool { guard let gameID, mainBusy else { return false }; return session?.gameID == gameID }
-    /// 手机槽空出来 / 主槽一单结束：起排着的第一个能起的（那款不被主槽占着）
     func pumpPhone() {
-        guard !phoneBusy, let i = phoneQueue.firstIndex(where: { !mainHolds($0.gameID) }) else { return }
-        phoneQueue.remove(at: i).run()
+        runNextQueuedPhoneJob()
+    }
+    func isPhoneJobActive(gameID: String, kind: JobSession.Kind? = nil) -> Bool {
+        guard phoneBusy, phoneSession?.gameID == gameID else { return false }
+        return kind == nil || phoneSession?.kind == kind
+    }
+    func isPhoneJobQueued(gameID: String, kind: JobSession.Kind? = nil) -> Bool {
+        phoneQueue.contains { $0.game.id == gameID && (kind == nil || $0.kind == kind) }
+    }
+    func removeQueuedPhoneJob(id: UUID) {
+        phoneQueue.removeAll { $0.id == id }
+    }
+    func moveQueuedPhoneJob(fromIndex: Int, toIndex: Int) {
+        guard phoneQueue.indices.contains(fromIndex),
+              toIndex >= 0,
+              toIndex < phoneQueue.count,
+              fromIndex != toIndex else { return }
+        let item = phoneQueue.remove(at: fromIndex)
+        phoneQueue.insert(item, at: toIndex)
+    }
+    func phoneOperationBlocked(kind: OperationIntent.Kind = .transfer, gameID: String?) -> Bool {
+        let intent = OperationIntent(kind: kind, gameID: gameID)
+        for (id, op) in backgroundOperations {
+            if phoneSession?.id == id { continue }
+            if intent.conflicts(with: op) { return true }
+        }
+        if playSessions.contains(where: { play in
+            if case .finished = play.job.phase { return false }
+            return intent.conflicts(with: OperationIntent(kind: .play, gameID: play.job.gameID, userID: play.user.id))
+        }) { return true }
+        return saveOperations.values.contains { intent.conflicts(with: $0) }
     }
 
     /// 启动时（启动器剃刀 M6）：碰游戏库 / 私有目录的后端作业一个接一个起——先列游戏库，再恢复批次，再查环境。
@@ -604,6 +750,15 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    /// 这件事的前提没齐：打开环境检查页（还没查过就查一遍），返回 false。
+    private func environmentAllows(_ scopes: [String], ignoring: Set<String> = []) -> Bool {
+        if checks.isEmpty, environmentError != nil { return true }   // 环境检查本身失败不挡：作业自己校验并给真实原因
+        if scopes.allSatisfy({ provider.environment.ready(for: $0, ignoring: ignoring) }) { return true }
+        showEnvironment = true
+        if checks.isEmpty { checkEnvironment() }
+        return false
+    }
+
     /// 换游戏库：setup 作业（作业层拦不支持的盘格式、云盘同步目录、非空的生文件夹）→ 写回偏好、重读游戏库、重新检查环境。
     /// 作业跑在作业页，没成的原因（如选的还在云盘里）在作业页显示；成了作业页可在访达中显示新游戏库。
     /// 换游戏库时作业层报认得出的风险（v0.3.1：认得出的风险让玩家确认）：问玩家「仍然继续 / 先不」，同意带对应参数重发，参数累积
@@ -613,7 +768,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var libraryConfirm: LibraryConfirm?
 
     func changeLibrary(to url: URL, move: Bool = false, accept: Set<String> = []) {
-        guard !busy else { return }
+        guard !busy, !hasRunningGames else { return }
         showEnvironment = false
         failAction(nil, game: nil)
         start(.setupLibrary, game: nil, name: url.lastPathComponent) { [weak self] sink in
@@ -869,6 +1024,36 @@ public final class S2ArmLauncherModel: ObservableObject {
         return nil
     }
 
+    func isExportPlatformActive(gameID: String, platform: ExportPlatform) -> Bool {
+        guard busy, session?.gameID == gameID, let run = session?.export else { return false }
+        return run.platforms.contains(platform)
+    }
+
+    func isExportPlatformQueued(gameID: String, platform: ExportPlatform) -> Bool {
+        exportQueue.contains { $0.game.id == gameID && $0.platforms.contains(platform) }
+    }
+
+    func removeQueuedExport(id: UUID) {
+        exportQueue.removeAll { $0.id == id }
+    }
+
+    func moveQueuedExport(fromIndex: Int, toIndex: Int) {
+        guard exportQueue.indices.contains(fromIndex),
+              toIndex >= 0,
+              toIndex < exportQueue.count,
+              fromIndex != toIndex else { return }
+        let item = exportQueue.remove(at: fromIndex)
+        exportQueue.insert(item, at: toIndex)
+    }
+
+    func moveQueuedExport(draggedID: UUID, targetID: UUID) {
+        guard draggedID != targetID,
+              let fromIndex = exportQueue.firstIndex(where: { $0.id == draggedID }),
+              let toIndex = exportQueue.firstIndex(where: { $0.id == targetID }) else { return }
+        let item = exportQueue.remove(at: fromIndex)
+        exportQueue.insert(item, at: toIndex)
+    }
+
     /// 确认页选完：记下选择（scheme = 方案 id；"" = 仍用原版），读库后接着导出刚才那一单
     func chooseDownstream(_ gameID: String, scheme: String) {
         downstreamPromptFor = nil
@@ -1094,6 +1279,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         exportPushing = true
         Task {
             do {
+                if installDeviceID == nil, connectedDevices.isEmpty { await refreshTargets() }
                 let names = try await provider.exportPush(gameId: gameID, device: installDeviceID)
                 phoneOutcome?.pushed = names; phoneOutcome?.pushNote = ""
             } catch {
@@ -1115,15 +1301,26 @@ public final class S2ArmLauncherModel: ObservableObject {
         if installChecking { pendingInstallCheck = (gameID, target); return }
         installChecking = true
         Task {
+            var resolved = target
+            if resolved == nil, connectedDevices.isEmpty {
+                await refreshTargets()
+                resolved = device ?? installDeviceID
+                if installGameID == gameID { installReadinessDevice = resolved }
+            }
             do {
-                let readiness = try await provider.installReadiness(gameId: gameID, device: target)
-                if installGameID == gameID && installReadinessDevice == target { installReadiness = readiness; installError = nil }
+                let readiness = try await provider.installReadiness(gameId: gameID, device: resolved)
+                if installGameID == gameID && installReadinessDevice == resolved { installReadiness = readiness; installError = nil }
             } catch {
-                if installGameID == gameID && installReadinessDevice == target { installError = error.localizedDescription }
+                if installGameID == gameID && installReadinessDevice == resolved { installError = error.localizedDescription }
             }
             installChecking = false
             if let next = pendingInstallCheck { pendingInstallCheck = nil; checkInstall(next.game, device: next.device) }
         }
+    }
+
+    /// 能不能开始装：清单说可以，或这次清单读失败（不因探测失败把玩家关在外面，install 作业会给真实原因）。
+    func installAllowed(_ gameID: String) -> Bool {
+        installGameID == gameID && (installReadiness?.ready == true || (installReadiness == nil && installError != nil))
     }
 
     /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
@@ -1183,38 +1380,19 @@ public final class S2ArmLauncherModel: ObservableObject {
     func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], ask: Bool = true, export: Bool = false) {
         let accept = acceptDropped ? accept.union(["acceptDropped"]) : accept
         // 不在这里再核装机页清单（启动器剃刀 M1）：装机页按钮和控制口调用前各自核过；批量出完自动装的款从没打开过装机页，原先在这里被悄悄挡掉、队列停住
-        // 出包等主槽作业照跑也能装（手机槽）；手机槽忙 / 这款正被主槽占着（正在出这款）→ 排队，那单结束接着装
-        guard !phoneBusy, !mainHolds(game.id) else {
-            phoneQueue.append((game.id, { [weak self] in self?.install(game, teamId: teamId, device: device, accept: accept, ask: ask, export: export) })); return
-        }
+        guard !phoneOperationBlocked(kind: .transfer, gameID: game.id) else { return }
         let teamId = teamId ?? Self.enteredTeam
         failAction(nil, game: nil)
         // 装到玩家选的那台（控制口明说了 device 的照它；s2armctl 不带就是空，作业层拒绝）。界面发起的一律带上，不靠作业层挑
         let device = export ? nil : device ?? installDeviceID
-        installedTo = ""
-        phoneOutcome = nil
-        selfSigning = export
-        start(.install, game: game, name: game.name) { [weak self] sink in
-            do {
-                let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, mode: export ? "export" : nil, events: sink)
-                if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
-                    self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
-                                                     exportFresh: r.exportFresh, exportReused: r.exportReused, exportUnwritten: r.exportUnwritten)
-                    NSWorkspace.shared.open(URL(fileURLWithPath: r.exportFolder))
-                } else if let r {
-                    self?.installedTo = Self.deviceLabel(kind: r.deviceKind, name: r.deviceName)
-                    self?.phoneOutcome = PhoneOutcome(device: Self.deviceLabel(kind: r.deviceKind, name: r.deviceName), packFiles: r.packFiles, packBytes: r.packBytes)
-                }
-                self?.installOpenToFinish = r?.openToFinish ?? false
-                self?.installTrustName = r?.trustName ?? ""
-            }
-            catch let f as JobFailure where ask && Self.confirmCodes[f.code ?? ""] != nil {
-                self?.dropConfirm = DropConfirm(kind: .install, game: game, message: f.errorDescription ?? "", code: f.code ?? "",
-                                                accept: accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device, export: export)
-                throw f
-            }
-            return nil
-        }
+        enqueueOrRunPhone(QueuedPhoneJob(kind: .install, game: game, teamId: teamId, device: device, accept: accept, ask: ask, export: export))
+    }
+
+    func installHost(_ game: GameSummary, confirmation: String? = nil, device: String? = nil) {
+        guard !phoneOperationBlocked(kind: .installHost, gameID: game.id), installAllowed(game.id) else { return }
+        failAction(nil, game: nil)
+        let device = device ?? installDeviceID
+        enqueueOrRunPhone(QueuedPhoneJob(kind: .installHost, game: game, confirmation: confirmation, device: device))
     }
 
     /// 确认框点了「仍然继续」
@@ -1228,31 +1406,73 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// 装回上一版手机 S2Arm（只换宿主后新宿主不好用时）。
     func restorePhone(_ game: GameSummary, device: String? = nil) {
-        guard !phoneBusy, !mainHolds(game.id) else { phoneQueue.append((game.id, { [weak self] in self?.restorePhone(game, device: device) })); return }
+        guard !phoneOperationBlocked(kind: .transfer, gameID: game.id) else { return }
         failAction(nil, game: nil)
         let device = device ?? game.iphoneInstallDevice ?? installDeviceID   // 装回当初那台
-        phoneOutcome = PhoneOutcome(device: installTargetLabel)
-        start(.installRestore, game: game, name: game.name) { [weak self] sink in
-            try await self?.provider.restorePhone(device: device, events: sink)
-            return nil
-        }
+        enqueueOrRunPhone(QueuedPhoneJob(kind: .installRestore, game: game, device: device))
     }
 
     /// accept：玩家确认过的参数（同 install：container_would_drop → acceptDropped、删前没能备份存档 save_backup_failed → acceptNoBackup），逐次累积
     func removeFromPhone(_ game: GameSummary, acceptDropped: Bool = false, ask: Bool = true, device: String? = nil, accept: Set<String> = []) {
         let accept = acceptDropped ? accept.union(["acceptDropped"]) : accept
-        guard !phoneBusy, !mainHolds(game.id) else {
-            phoneQueue.append((game.id, { [weak self] in self?.removeFromPhone(game, ask: ask, device: device, accept: accept) })); return
-        }
+        guard !phoneOperationBlocked(kind: .removeFromPhone, gameID: game.id) else { return }
         failAction(nil, game: nil)
         let device = device ?? game.iphoneInstallDevice ?? installDeviceID   // 从装着它的那台删
-        phoneOutcome = PhoneOutcome(device: installTargetLabel)
-        start(.installRemove, game: game, name: game.name) { [weak self] sink in
-            do { _ = try await self?.provider.removeFromPhone(gameId: game.id, accept: accept, device: device, events: sink) }
-            catch let f as JobFailure where ask && Self.confirmCodes[f.code ?? ""] != nil {
-                self?.dropConfirm = DropConfirm(kind: .installRemove, game: game, message: f.errorDescription ?? "", code: f.code ?? "",
-                                                accept: accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device)
-                throw f
+        enqueueOrRunPhone(QueuedPhoneJob(kind: .installRemove, game: game, device: device, accept: accept, ask: ask))
+    }
+
+    private func enqueueOrRunPhone(_ item: QueuedPhoneJob) {
+        if phoneBusy || mainHolds(item.game.id) || operationBlocked(item.conflictIntent) {
+            phoneQueue.append(item)
+            return
+        }
+        runPhone(item)
+    }
+
+    private func runPhone(_ item: QueuedPhoneJob) {
+        let game = item.game
+        installedTo = ""
+        phoneOutcome = [.installRemove, .installRestore].contains(item.kind) ? PhoneOutcome(device: installTargetLabel) : nil
+        selfSigning = item.export
+        startPhone(item.kind, game: game, name: game.name) { [weak self] sink in
+            var device = item.device
+            if device == nil, !item.export, let self, self.connectedDevices.isEmpty {
+                await self.refreshTargets()
+                device = self.installDeviceID
+            }
+            switch item.kind {
+            case .install:
+                do {
+                    let r = try await self?.provider.install(gameId: game.id, teamId: item.teamId, device: device, accept: item.accept, mode: item.export ? "export" : nil, events: sink)
+                    if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
+                        self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
+                                                         exportFresh: r.exportFresh, exportReused: r.exportReused, exportUnwritten: r.exportUnwritten)
+                        NSWorkspace.shared.open(URL(fileURLWithPath: r.exportFolder))
+                    } else if let r {
+                        self?.installedTo = Self.deviceLabel(kind: r.deviceKind, name: r.deviceName)
+                        self?.phoneOutcome = PhoneOutcome(device: Self.deviceLabel(kind: r.deviceKind, name: r.deviceName), packFiles: r.packFiles, packBytes: r.packBytes)
+                    }
+                    self?.installOpenToFinish = r?.openToFinish ?? false
+                    self?.installTrustName = r?.trustName ?? ""
+                } catch let f as JobFailure where item.ask && Self.confirmCodes[f.code ?? ""] != nil {
+                    self?.dropConfirm = DropConfirm(kind: .install, game: game, message: f.errorDescription ?? "", code: f.code ?? "",
+                                                    accept: item.accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device, export: item.export)
+                    throw f
+                }
+            case .installHost:
+                _ = try await self?.provider.installHost(gameId: game.id, confirmation: item.confirmation, device: device, events: sink)
+            case .installRemove:
+                do {
+                    _ = try await self?.provider.removeFromPhone(gameId: game.id, accept: item.accept, device: device, events: sink)
+                } catch let f as JobFailure where item.ask && Self.confirmCodes[f.code ?? ""] != nil {
+                    self?.dropConfirm = DropConfirm(kind: .installRemove, game: game, message: f.errorDescription ?? "", code: f.code ?? "",
+                                                    accept: item.accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device)
+                    throw f
+                }
+            case .installRestore:
+                try await self?.provider.restorePhone(device: device, events: sink)
+            default:
+                break
             }
             return nil
         }
@@ -1264,9 +1484,31 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     // ---- play ----
 
-    func play(_ game: GameSummary, uiLanguage: String?) {
-        guard !busy, !cloudSyncing else { return }
+    func isPlaying(gameID: String, userID: String? = nil) -> Bool {
+        playSessions.contains { !isFinished($0.job) && $0.job.gameID == gameID && (userID == nil || $0.user.id == userID) }
+    }
+    var hasRunningGames: Bool { playSessions.contains { !isFinished($0.job) } }
+    var playingGameID: String? { playSessions.first { !isFinished($0.job) }?.job.gameID }
+
+    func play(_ game: GameSummary, uiLanguage: String?, userID: String? = nil) {
         failAction(nil, game: nil)
+        guard !cloudSyncing else { return }
+        if userRegistry != nil || usersError != nil {
+            guard let user = userRegistry?.users.first(where: { $0.id == (userID ?? selectedUserID) }) else {
+                failAction("用户资料无效，请刷新用户列表；没有更改所选用户。", game: game.id); return
+            }
+            playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: true)
+            return
+        }
+        let player = userID == nil ? Self.launchPlayer() : nil
+        let user: LauncherUser
+        if let userID {
+            user = LauncherUser(id: userID, name: "Player 1")
+        } else if let player {
+            user = LauncherUser(id: player.isFirst ? selectedUserID : player.uid, name: player.name.isEmpty ? "Player 1" : player.name)
+        } else {
+            user = LauncherUser(id: selectedUserID, name: "Player 1")
+        }
         // 崩了能恢复（11-13 维护者改定：开局前不问）：上次开着某几条时异常退出，作业层已当场关掉（pack/jobs/cheats.py note_crash）→
         //   这次照常开局，同时弹一条通知说关了什么、想用去设置里再开；读不到记录照常开局
         Task {
@@ -1275,7 +1517,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 crashPrompt = CrashPrompt(game: game, uiLanguage: uiLanguage, names: names)
                 _ = try? await saveJob("communitySave", gameID: game.id, extra: ["crashAnswer": "ack"])
             }
-            playChecked(game, uiLanguage: uiLanguage)
+            playChecked(game, uiLanguage: uiLanguage, user: user, player: player)
         }
     }
 
@@ -1286,8 +1528,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             switch $0["kind"] as? String { case "fps": return CrashPrompt.fpsName; case "fs": return CrashPrompt.fullscreenName; default: return $0["name"] as? String } }
     }
 
-    private func playChecked(_ game: GameSummary, uiLanguage: String?) {
-        guard !busy, !cloudSyncing else { return }
+    private func playChecked(_ game: GameSummary, uiLanguage: String?, user: LauncherUser, player: LocalPlayer? = nil) {
+        guard !mainBusy, !cloudSyncing else { return }
         // 不按前端的环境检查结果拦（剃刀 M4）：launch 作业自己校验运行文件与环境，缺什么回真实原因
         // 开了 iCloud 存档：先取回 / 处理冲突再开局（S2ArmLauncherModel+CloudSaves）；同步失败本地存档没动，照常开局、错误行写原因
         if cloudFolder != nil {
@@ -1296,16 +1538,23 @@ public final class S2ArmLauncherModel: ObservableObject {
                 let why = await cloudSync(game.id)
                 cloudSyncing = false
                 // 同步期间别的作业（导出 / 导入）可能已经开始：这时不开局，免得盖掉它的会话（11-09 审查）
-                if busy { failAction(Self.cloudBusyAfterSync, game: game.id); return }
-                startPlay(game, uiLanguage: uiLanguage)
+                if mainBusy { failAction(Self.cloudBusyAfterSync, game: game.id); return }
+                playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: false, player: player)
                 if let why { failAction(Self.cloudFailure(why), game: game.id) }
             }
             return
         }
-        startPlay(game, uiLanguage: uiLanguage)
+        playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: false, player: player)
     }
 
-    private func startPlay(_ game: GameSummary, uiLanguage: String?) {
+    private func playForUser(_ game: GameSummary, uiLanguage: String?, user: LauncherUser, useRegistry: Bool, player: LocalPlayer? = nil) {
+        guard !isPlaying(gameID: game.id, userID: user.id) else {
+            failAction("同一游戏和用户已有一局在运行，请先停止。", game: game.id); return
+        }
+        guard !localStateBlocked(gameID: game.id, userID: user.id) else {
+            failAction("此操作正在使用相同的游戏资源或用户存档，请等冲突任务结束。", game: game.id); return
+        }
+        if !checks.isEmpty, !environmentAllows(["launch"]) { return }
         // The helper accepts one consumer. Release the launcher's reader before
         // the host can connect, including launches initiated by the control port.
         gamepad.releaseRelay()
@@ -1315,20 +1564,40 @@ public final class S2ArmLauncherModel: ObservableObject {
         ]
         if let relaySocket { controllerArguments["switch2ProRelaySocket"] = relaySocket }
         // 本地玩家（#623）：顶栏选的玩家随 launch 请求给作业层（pack/jobs/build.py runtime_env → 服务层 S2A_PLAYER_USER / 这个玩家的 SaveData）；没建过玩家不带（旧行为）
-        if let player = Self.launchPlayer() {
+        if let player = player ?? (useRegistry ? nil : Self.launchPlayer()) {
             controllerArguments["playerUser"] = player.serviceUser
             controllerArguments["playerName"] = player.name
             controllerArguments["playerFolder"] = player.folder
         }
+        if !useRegistry, let listJSON = Self.localPlayersJSON() {
+            controllerArguments["localPlayers"] = listJSON
+        }
         controllerGameStarted = false
+        let id = UUID()
+        let job = JobSession(kind: .play, gameID: game.id, name: game.name)
+        playSessions.append(PlaySession(id: id, user: user, job: job))
+        if !useRegistry { session = job }
         do {
-            let sink = EventSink { [weak self] event in self?.ingest(event) }
-            running = try provider.run(InstalledGame(gameId: game.id, name: game.name),
-                                       settings: S2ArmAppleAdapter.Settings(
-                                        values: controllerArguments,
-                                        uiLanguage: uiLanguage), events: sink)
-            session = JobSession(kind: .play, gameID: game.id, name: game.name)
+            let sink = EventSink { [weak self] event in
+                // Main-actor UI state, even when a test/client uses another callback queue.
+                DispatchQueue.main.async { self?.ingestPlay(event, id: id) }
+            }
+            let handle = try provider.run(
+                InstalledGame(gameId: game.id, name: game.name),
+                settings: S2ArmAppleAdapter.Settings(
+                    values: controllerArguments,
+                    uiLanguage: uiLanguage,
+                    userId: useRegistry ? user.id : nil
+                ),
+                events: sink
+            )
+            if !useRegistry { running = handle }
+            if let index = playSessions.firstIndex(where: { $0.id == id }), !isFinished(playSessions[index].job) {
+                playSessions[index].running = handle
+            }
         } catch {
+            playSessions.removeAll { $0.id == id }
+            if !useRegistry, session?.id == job.id { session = nil }
             failAction(error.localizedDescription, game: game.id)
         }
     }
@@ -1349,7 +1618,78 @@ public final class S2ArmLauncherModel: ObservableObject {
     static func playerRequest(_ defaults: UserDefaults = .standard) -> [String: String]? {
         launchPlayer(defaults).map { ["user": $0.serviceUser, "name": $0.name, "folder": $0.folder] }
     }
+    /// 全部本地玩家的 JSON 数组串，供多人手柄起局时同步进 Switch AccountManager（与 NS 多用户行为一致）
+    static func localPlayersJSON(_ defaults: UserDefaults = .standard) -> String? {
+        let items = playerStore(defaults: defaults).all.map {
+            ["user": $0.serviceUser, "name": $0.name, "folder": $0.folder]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: items, options: []),
+              let str = String(data: data, encoding: .utf8) else { return nil }
+        return str
+    }
     func shutdownControllerConnection() { controller.shutdown() }
+
+    private func ingestPlay(_ event: EngineEvent, id: UUID) {
+        guard let index = playSessions.firstIndex(where: { $0.id == id }),
+              !isFinished(playSessions[index].job), event.ev != "heartbeat" else { return }
+        var play = playSessions[index].job
+        if let taskId = event.fields["taskId"] as? String, !taskId.isEmpty { play.taskID = taskId }
+        if let stage = event.stage {
+            play.stage = stage
+            if event.ev == "stage", play.stages.last != stage { play.stages.append(stage) }
+            if event.fields["stageKey"] as? String == "game_running" {
+                if let gid = play.gameID { home.recordPlay(gid) }
+                controllerGameStarted = true
+                controller.gameDidStart()
+            }
+        }
+        if !event.message.isEmpty {
+            play.message = event.message
+            play.log.append(event.message)
+            if play.log.count > Self.logLimit { play.log.removeFirst(play.log.count - Self.logLimit) }
+        }
+        if event.isFinal {
+            let state = JobOutcome.State(rawValue: event.fields["state"] as? String ?? "") ?? .interrupted
+            play.phase = .finished(state)
+            play.ended = Date()
+            if controllerGameStarted {
+                controllerGameStarted = false
+                controller.gameDidExit()
+            }
+            if let gid = play.gameID, cloudFolder != nil {
+                cloudSyncing = true
+                Task {
+                    let why = await cloudSync(gid)
+                    cloudSyncing = false
+                    if let why { failAction(Self.cloudFailure(why), game: gid) }
+                }
+            }
+            if state == .completed, (event.fields["result"] as? [String: Any])?["returnToLibrary"] as? Bool == true {
+                backToLibrary()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+        playSessions[index].job = play
+        if session?.id == play.id { session = play }
+        if event.isFinal { refresh() }
+    }
+
+    func stopPlay(id: UUID) {
+        guard let index = playSessions.firstIndex(where: { $0.id == id }),
+              let running = playSessions[index].running, playSessions[index].job.phase == .running else { return }
+        playSessions[index].job.phase = .stopping
+        if session?.id == playSessions[index].job.id { session = playSessions[index].job }
+        provider.control(running, .stop)
+    }
+
+    @discardableResult func stopPlay(taskID: String) -> Bool {
+        guard let play = playSessions.first(where: { ($0.running?.taskId == taskID || $0.job.taskID == taskID) && !isFinished($0.job) }) else { return false }
+        stopPlay(id: play.id); return true
+    }
+
+    func dismissPlayResult(id: UUID) {
+        playSessions.removeAll { $0.id == id && isFinished($0.job) }
+    }
 
     // ---- 放密钥 / 删除 / 诊断（本机控制口用；参数与作业同旧启动器）----
 
@@ -1409,6 +1749,15 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     func rememberExportLocation(_ path: String, game: GameSummary) {
         do { try provider.settings.setExportLocation(path, game: game.id) } catch { choiceError = error.localizedDescription }
+    }
+
+    func verifyGame(_ game: GameSummary) {
+        guard !busy else { return }
+        failAction(nil, game: nil)
+        start(.verify, game: game, name: game.name) { [weak self] sink in
+            try await self?.provider.verifyGame(game.id, events: sink)
+            return nil
+        }
     }
 
     /// 移动到其他位置（整个文件夹，存档跟着走）。
@@ -1610,45 +1959,187 @@ public final class S2ArmLauncherModel: ObservableObject {
     // ---- jobs ----
 
     /// 起一个作业：body 交适配层（事件进 sink），回来的路径做完后可在访达里显示。可停（stop = 取消这个 Task，适配层请作业停）。
+    private func startPhone(_ kind: JobSession.Kind, game: GameSummary?, name: String,
+                            _ body: @escaping @MainActor (EventSink) async throws -> String?) {
+        let fresh = JobSession(kind: kind, gameID: game?.id, name: name)
+        guard !phoneBusy, !operationBlocked(fresh.conflictIntent) else {
+            failAction("此操作正在使用相同的游戏资源或设备，请等冲突任务结束。", game: fresh.gameID); return
+        }
+        let owner = fresh.id
+        backgroundOperations[owner] = fresh.conflictIntent
+        phoneSession = fresh
+        if Self.phoneKinds.contains(fresh.kind) { phoneResult = nil }
+        let sink = EventSink { [weak self] event in self?.ingestPhone(event, owner: owner) }
+        backgroundWork[owner] = Task { [weak self] in
+            do {
+                let reveal = try await body(sink)
+                self?.finishPhone(owner: owner, .completed, message: "", reveal: reveal)
+            } catch let failure as JobFailure {
+                self?.finishPhone(owner: owner, failure.state, message: failure.errorDescription ?? "", code: failure.code,
+                                  suggestion: failure.outcome.diagnostics.first?["suggestion"] as? String ?? "")
+            } catch is CancellationError {
+                self?.finishPhone(owner: owner, .cancelled, message: "")
+            } catch {
+                self?.finishPhone(owner: owner, .failed, message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func ingestPhone(_ event: EngineEvent, owner: UUID) {
+        guard backgroundOperations[owner] != nil,
+              var session = phoneSession, session.id == owner, !isFinished(session) else { return }
+        session.taskID = event.fields["taskId"] as? String ?? session.taskID
+        if event.ev == "heartbeat" { self.phoneSession = session; return }
+        if let stage = event.stage, !stage.isEmpty {
+            session.stage = stage
+            if event.ev == "stage", session.stages.last != stage { session.stages.append(stage) }
+        }
+        session.progress.ingest(event)
+        if !event.message.isEmpty {
+            session.message = event.message
+            let line = event.ev == "stage" ? "▸ " + event.message : event.message
+            if session.log.last != line { session.log.append(line) }
+            if session.log.count > Self.logLimit { session.log.removeFirst(session.log.count - Self.logLimit) }
+        }
+        self.phoneSession = session
+    }
+
+    private func finishPhone(owner: UUID, _ state: JobOutcome.State, message: String, reveal: String? = nil, code: String? = nil, suggestion: String = "") {
+        guard backgroundOperations.removeValue(forKey: owner) != nil else { return }
+        backgroundWork.removeValue(forKey: owner)
+        guard var session = phoneSession, session.id == owner, !isFinished(session) else { return }
+        session.taskID = nil
+        session.phase = .finished(state)
+        session.failureCode = code; session.suggestion = suggestion
+        if !message.isEmpty {
+            session.message = message
+            if session.log.last != message { session.log.append(message) }
+        }
+        session.reveal = reveal
+        session.progress.finish()
+        session.ended = Date()
+        lastPhoneSession = session
+        dynamicFinished(state)
+        if isInline(session) {
+            self.phoneSession = nil
+        } else {
+            self.phoneSession = session
+        }
+        if phoneOverview != nil { refreshUpdateHints(); refreshPhoneOverview() }
+        inlineFailure = (state == .failed || state == .interrupted) ? (session.kind, session.message, session.suggestion) : nil
+        if state == .completed && (session.kind == .install || session.kind == .installHost) { installDone = session.gameID }
+        if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
+        if Self.phoneKinds.contains(session.kind), let id = session.gameID { phoneResult = (id, session.name, state == .completed) }
+        if state == .cancelled {
+            phoneQueue = []
+        } else {
+            pumpPhone()
+        }
+        if !phoneBusy && session.kind == .install { Task { pumpQueue() } }
+        refresh()
+    }
+
+    private func runNextQueuedPhoneJob() {
+        guard !phoneBusy else { return }
+        guard let idx = phoneQueue.firstIndex(where: { item in
+            if item.customRun != nil { return !mainHolds(item.gameID) }
+            return !mainHolds(item.gameID) && !operationBlocked(item.conflictIntent)
+        }) else { return }
+        let next = phoneQueue.remove(at: idx)
+        if let customRun = next.customRun {
+            customRun()
+            return
+        }
+        runPhone(next)
+    }
+
+    func stopPhone() {
+        guard let id = phoneSession?.id else { return }
+        _ = stopBackground(id: id)
+    }
+
     func start(_ kind: JobSession.Kind, game: GameSummary?, name: String,
-                       _ body: @escaping @MainActor (EventSink) async throws -> String?) {
+               _ body: @escaping @MainActor (EventSink) async throws -> String?) {
         start(JobSession(kind: kind, gameID: game?.id, name: name), body)
     }
 
-    /// 作业槽：手机作业（JobSession.isPhoneJob）进手机槽，其余进主槽
-    enum Slot { case main, phone }
-    private func job(_ slot: Slot) -> JobSession? { slot == .main ? session : phoneSession }
-    private func setJob(_ slot: Slot, _ value: JobSession?) { if slot == .main { session = value } else { phoneSession = value } }
-
     func start(_ fresh: JobSession, _ body: @escaping @MainActor (EventSink) async throws -> String?) {
-        let slot: Slot = fresh.isPhoneJob ? .phone : .main
-        setJob(slot, fresh)
+        if fresh.kind == .installUpdate || fresh.kind == .pushSelected {
+            var phoneFresh = JobSession(kind: fresh.kind, gameID: nil, name: fresh.name)
+            phoneFresh.started = fresh.started
+            if let existing = phoneSession, existing.phase == .stopping {
+                backgroundOperations.removeValue(forKey: existing.id)
+                backgroundWork[existing.id]?.cancel()
+                backgroundWork.removeValue(forKey: existing.id)
+                phoneSession = nil
+            }
+            guard !phoneBusy, !operationBlocked(phoneFresh.conflictIntent) else {
+                failAction("此操作正在使用相同的游戏资源或设备，请等冲突任务结束。", game: phoneFresh.gameID); return
+            }
+            let owner = phoneFresh.id
+            backgroundOperations[owner] = phoneFresh.conflictIntent
+            phoneSession = phoneFresh
+            let sink = EventSink { [weak self] event in self?.ingestPhone(event, owner: owner) }
+            let task = Task { [weak self] in
+                do {
+                    let reveal = try await body(sink)
+                    self?.finishPhone(owner: owner, .completed, message: "", reveal: reveal)
+                } catch let failure as JobFailure {
+                    self?.finishPhone(owner: owner, failure.state, message: failure.errorDescription ?? "", code: failure.code,
+                                      suggestion: failure.outcome.failureDiagnostic?["suggestion"] as? String ?? "")
+                } catch is CancellationError {
+                    self?.finishPhone(owner: owner, .cancelled, message: "")
+                } catch {
+                    self?.finishPhone(owner: owner, .failed, message: error.localizedDescription)
+                }
+            }
+            backgroundWork[owner] = task
+            phoneWork = task
+            return
+        }
+        guard !mainBusy, !operationBlocked(fresh.conflictIntent) else {
+            failAction("此操作正在使用相同的游戏资源或用户存档，请等冲突任务结束。", game: fresh.gameID); return
+        }
+        let owner = fresh.id
+        backgroundOperations[owner] = fresh.conflictIntent
+        session = fresh
         if Self.phoneKinds.contains(fresh.kind) { phoneResult = nil }
-        let sink = EventSink { [weak self] event in self?.ingest(event, slot: slot) }
+        let sink = EventSink { [weak self] event in self?.ingest(event, owner: owner) }
         let task = Task { [weak self] in
             do {
                 let reveal = try await body(sink)
-                self?.finish(.completed, message: "", reveal: reveal, slot: slot)
+                self?.finish(owner: owner, .completed, message: "", reveal: reveal)
             } catch let failure as JobFailure {
-                self?.finish(failure.state, message: failure.errorDescription ?? "", code: failure.code,
-                             suggestion: failure.outcome.failureDiagnostic?["suggestion"] as? String ?? "", slot: slot)
+                self?.finish(owner: owner, failure.state, message: failure.errorDescription ?? "", code: failure.code,
+                             suggestion: failure.outcome.diagnostics.first?["suggestion"] as? String ?? "")
             } catch is CancellationError {
-                self?.finish(.cancelled, message: "", slot: slot)
+                self?.finish(owner: owner, .cancelled, message: "")
             } catch is ExportIncomplete {
-                self?.finish(.failed, message: "", slot: slot)
+                self?.finish(owner: owner, .failed, message: "")
             } catch {
-                self?.finish(.failed, message: error.localizedDescription, slot: slot)
+                self?.finish(owner: owner, .failed, message: error.localizedDescription)
                 if Self.bundleIncomplete(error) { self?.offerFullDownload(message: error.localizedDescription) }
             }
         }
-        if slot == .main { work = task } else { phoneWork = task }
+        backgroundWork[owner] = task
+        work = task
     }
 
-    func ingest(_ event: EngineEvent, slot: Slot = .main) {
-        guard var session = job(slot), !isFinished(session) else { return }
-        if let id = event.fields["taskId"] as? String, !id.isEmpty, session.taskID != id { session.taskID = id; setJob(slot, session) }
-        if event.ev == "heartbeat" { return }
-        if event.ev == "space", let space = PackSpace(event.fields["space"]) { session.space = space; setJob(slot, session); return }
+    func ingest(_ event: EngineEvent, owner: UUID? = nil) {
+        if let owner {
+            guard backgroundOperations[owner] != nil,
+                  var session = session, session.id == owner, !isFinished(session) else { return }
+            ingestIntoSession(&session, event: event)
+        } else {
+            guard var session = session, !isFinished(session) else { return }
+            ingestIntoSession(&session, event: event)
+        }
+    }
+
+    private func ingestIntoSession(_ session: inout JobSession, event: EngineEvent) {
+        if let id = event.fields["taskId"] as? String, !id.isEmpty, session.taskID != id { session.taskID = id; self.session = session }
+        if event.ev == "heartbeat" { self.session = session; return }
+        if event.ev == "space", let space = PackSpace(event.fields["space"]) { session.space = space; self.session = session; return }
         if let stage = event.stage, !stage.isEmpty {
             session.stage = stage
             if event.ev == "stage", session.stages.last != stage { session.stages.append(stage) }
@@ -1665,7 +2156,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             if session.log.last != line { session.log.append(line) }
             if session.log.count > Self.logLimit { session.log.removeFirst(session.log.count - Self.logLimit) }
         }
-        setJob(slot, session)
+        self.session = session
         // 一局的结局只从事件来（run 是同步起的）；别的作业由 Task 结束收尾（中间可能有好几个作业，如先装 .NET 再出包）
         if session.kind == .play, event.isFinal {
             let state = JobOutcome.State(rawValue: event.fields["state"] as? String ?? "") ?? .interrupted
@@ -1680,8 +2171,22 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func isFinished(_ s: JobSession) -> Bool { if case .finished = s.phase { return true }; return false }
 
-    func finish(_ state: JobOutcome.State, message: String, reveal: String? = nil, code: String? = nil, suggestion: String = "", slot: Slot = .main) {
-        guard var session = job(slot), !isFinished(session) else { return }
+    func finish(_ state: JobOutcome.State, message: String, reveal: String? = nil, code: String? = nil, suggestion: String = "") {
+        guard let session = session, !isFinished(session) else { return }
+        finish(owner: session.id, state, message: message, reveal: reveal, code: code, suggestion: suggestion, requireClaim: false)
+    }
+
+    private func finish(owner: UUID, _ state: JobOutcome.State, message: String, reveal: String? = nil, code: String? = nil, suggestion: String = "", requireClaim: Bool = true) {
+        // perform() resumes only after worker exit, not on cancel or result line.
+        // An old completion must never release a replacement operation's claim.
+        if requireClaim {
+            guard backgroundOperations.removeValue(forKey: owner) != nil else { return }
+        } else {
+            backgroundOperations.removeValue(forKey: owner)
+        }
+        backgroundWork.removeValue(forKey: owner)
+        guard var session = session, session.id == owner, !isFinished(session) else { return }
+        session.taskID = nil
         session.phase = .finished(state)
         session.failureCode = code; session.suggestion = suggestion
         if !message.isEmpty {
@@ -1691,11 +2196,11 @@ public final class S2ArmLauncherModel: ObservableObject {
         session.reveal = reveal
         session.progress.finish()
         session.ended = Date()
-        setJob(slot, session)
+        self.session = session
         if session.isPhoneJob { lastPhoneSession = session; dynamicFinished(state) }
         // 出包 / 推完 / 装完：game.json 的产物记录和设备记录才会变，建议更新和总控台再读一次（开关关着不读）
         if phoneOverview != nil, session.isPhoneJob || [.export, .prepare].contains(session.kind) { refreshUpdateHints(); refreshPhoneOverview() }
-        if slot == .main { running = nil; work = nil } else { phoneWork = nil }
+        running = nil; work = nil
         defer { pumpPhone() }   // 手机槽空了 / 主槽这单不再占着那款：起排着的手机作业
         if session.kind == .play, controllerGameStarted {
             controllerGameStarted = false
@@ -1703,10 +2208,10 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
         // 放密钥、添加游戏、欢迎页上的下载：结果留在原页（弹窗 / 欢迎页那一行），不换到日志页（11-08 维护者）；环境页发起的下载成了也直接回来
         if isInline(session) || (state == .completed && Self.repairKinds.contains(session.kind)) {
-            setJob(slot, nil)
+            self.session = nil
             inlineFailure = (state == .failed || state == .interrupted) ? (session.kind, session.message, session.suggestion) : nil
         }
-        if state == .completed && session.kind == .install { installDone = session.gameID }
+        if state == .completed && (session.kind == .install || session.kind == .installHost) { installDone = session.gameID }
         if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
         // 「导出自签包」点在没出过包的款上：出包没成（起不来 / 失败 / 取消）就没排进 installAfterQueue，标记清掉——
         //   否则这款以后正常出包会被画成导出、批量「更新并重新出」排进来的装机会误走导出
@@ -1761,7 +2266,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// 这个作业的进度留在原页（弹窗 / 欢迎页），不换到作业日志页。
     func isInline(_ s: JobSession) -> Bool {
-        [.keys, .importGames, .install, .installRemove, .installRestore, .delete, .clearCache, .diagnostics].contains(s.kind) || (showsWelcome && Self.repairKinds.contains(s.kind))
+        [.keys, .importGames, .install, .installHost, .installRemove, .installRestore, .delete, .clearCache, .diagnostics].contains(s.kind) || (showsWelcome && Self.repairKinds.contains(s.kind))
     }
 
     /// 欢迎页的「一键出包」：进和游戏库同一张出包页（维护者 11-11：首次出包缺设置项、选不了 iPhone / Mac），
@@ -1775,11 +2280,6 @@ public final class S2ArmLauncherModel: ObservableObject {
     func clearInlineFailure() { inlineFailure = nil }
 
     /// 停手机槽的作业（装机页 / 手机作业页的「取消」）
-    func stopPhone() {
-        guard var s = phoneSession, s.phase == .running else { return }
-        s.phase = .stopping; phoneSession = s
-        phoneWork?.cancel()
-    }
     /// 手机作业结束后从它的作业页回游戏库（更新 iPhone 上的 S2Arm 用整页显示）
     func backFromPhone() {
         guard let s = phoneSession, isFinished(s) else { return }
@@ -1787,12 +2287,61 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     func stop() {
-        guard var session = session, session.phase == .running else { return }
+        if batchRunning, session?.kind == .export {
+            if var s = session, s.phase == .running { s.phase = .stopping; session = s }
+            batchWork?.cancel()
+            return
+        }
+        guard let current = session else { return }
+        if backgroundOperations[current.id] != nil {
+            _ = stopBackground(id: current.id)
+        } else if current.phase == .running {
+            if current.kind == .play, let play = playSessions.first(where: { $0.job.id == current.id }) {
+                stopPlay(id: play.id)
+            } else {
+                var s = current
+                s.phase = .stopping
+                session = s
+                if s.kind == .play, let running { provider.control(running, .stop) }
+                else { work?.cancel() }
+            }
+        }
+    }
+
+    /// Stop only the captured owner. Unknown/stale IDs never fall back to the
+    /// visible job; repeated cancel remains idempotent until worker exit.
+    @discardableResult
+    func stopBackground(id: UUID) -> Bool {
+        if let play = playSessions.first(where: { $0.id == id || $0.job.id == id }) {
+            stopPlay(id: play.id)
+            return true
+        }
+        guard backgroundOperations[id] != nil else { return false }
+        if var phone = phoneSession, phone.id == id {
+            if phone.phase == .stopping { return true }
+            guard phone.phase == .running else { return false }
+            phone.phase = .stopping
+            self.phoneSession = phone
+            backgroundWork[id]?.cancel()
+            return true
+        }
+        guard var session, session.id == id else { return false }
+        if session.phase == .stopping { return true }
+        guard session.phase == .running else { return false }
         session.phase = .stopping
         self.session = session
         if session.kind == .play, let running { provider.control(running, .stop) }
         else if batchRunning, session.kind == .export { batchWork?.cancel() }   // 批量出包：取消整个编排作业（正在出的那步停下，已出好的保留）
-        else { work?.cancel() }
+        else { backgroundWork[id]?.cancel() }
+        return true
+    }
+
+    func stopBackground(taskID: String) -> Bool {
+        if let phone = phoneSession, phone.taskID == taskID {
+            return stopBackground(id: phone.id)
+        }
+        guard let session, session.taskID == taskID else { return false }
+        return stopBackground(id: session.id)
     }
 
     /// 回库：只有作业结束了才能关掉作业页。

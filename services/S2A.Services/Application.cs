@@ -46,11 +46,25 @@ namespace S2A.Services
 
         // 本进程登记的游戏数据根（ExecuteProgram 切程序前核包里有没有目标序号用）
         internal static string GameDir { get; set; }
+        private static ulong _applicationId;
+        private static BlitStruct<ApplicationControlProperty> _nacp;
 
         internal static void Reset()
         {
             ProgramId = 0;
+            _applicationId = 0;
+            _nacp = default;
             LazyHostFile.CloseAll();
+        }
+
+        internal static void EnsureCurrentSaveData(Switch device)
+        {
+            if (device == null || _applicationId == 0 || _nacp.ByteSpan.Length == 0)
+            {
+                return;
+            }
+
+            ProcessLoaderHelper.EnsureSaveData(device, new ApplicationId(_applicationId), _nacp);
         }
 
         public static void Register(Switch device, string gameDir, bool requireSuccess = false)
@@ -73,6 +87,7 @@ namespace S2A.Services
                 Red.Report("多程序合集：程序号末位与用户通道序号不一致", $"程序号 {ProgramId:X16}，序号 {programIndex}，目录 {programDir}");
             // 应用号 = 程序号去掉末位（Ryujinx NcaExtensions.Load：多程序应用的存档按主程序号建）；单程序款末位本来就是 0
             ulong applicationId = ProgramId & ~0xFul;
+            _applicationId = applicationId;
 
             BlitStruct<ApplicationControlProperty> nacp = new(1);
             string nacpPath = Path.Combine(programDir, "ctl", "control.nacp");
@@ -86,6 +101,7 @@ namespace S2A.Services
             {
                 Red.Report("游戏数据缺 ctl/control.nacp", programDir);
             }
+            _nacp = nacp;
 
             // Horizon 服务（arp 等）要先就绪
             if (requireSuccess) HorizonHost.WaitServicesReady(device.System.ServiceTable, System.TimeSpan.FromSeconds(30));

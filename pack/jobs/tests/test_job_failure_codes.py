@@ -343,6 +343,10 @@ class InstallFailures(JobCase):
                  patch.object(install, "udid_of", return_value=""), patch.object(install, "pull_seen"), \
                  patch.object(install, "backup_saves"), patch.object(packer, "assemble", side_effect=fake_assemble), \
                  patch.object(self.c, "run"), \
+                 patch("mobile_lifecycle.plan", return_value=None), \
+                 patch("mobile_lifecycle.stamp_install", return_value={"expectedInstallation": {}}), \
+                 patch("mobile_lifecycle.live_info", return_value={}), \
+                 patch("mobile_lifecycle.before_install"), \
                  patch.object(install.subprocess, "run", side_effect=unpack), \
                  patch.object(diag, "devicectl", return_value=(9, {}, raw)):
                 with self.assertRaises(Failure) as got: install.install(self.c)

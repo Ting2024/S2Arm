@@ -53,6 +53,7 @@ public final class S2ArmEngineProvider: EngineProvider {
     public let environment: EnvironmentService
     public let installer: InstallService
     public let space: SpaceService
+    public let users: UserService
 
     public init(client: JobClient, xcodeLocator: @escaping () -> String? = XcodeLocator.detect) {
         self.client = client
@@ -62,6 +63,7 @@ public final class S2ArmEngineProvider: EngineProvider {
         environment = EnvironmentService(client: client, xcodeLocator: xcodeLocator)
         installer = InstallService(client: client)
         space = SpaceService(client: client)
+        users = UserService(client: client)
     }
 
     // MARK: inspect
@@ -175,6 +177,11 @@ public final class S2ArmEngineProvider: EngineProvider {
         return r["message"] as? String ?? ""
     }
 
+    /// Explicit complete resource verification; separate from launching a game.
+    public func verifyGame(_ gameId: String, events: EventSink = .discard) async throws {
+        _ = try await client.perform("verify", extra: ["gameId": gameId], events: events)
+    }
+
     /// 删这款（delete 作业：IPA / 资源包 / 出包中间产物 / 缓存，存档与原始游戏文件保留）。
     public func deleteGame(_ gameId: String, events: EventSink = .discard) async throws {
         _ = try await client.perform("delete", extra: ["gameId": gameId], events: events)
@@ -263,13 +270,14 @@ public final class S2ArmEngineProvider: EngineProvider {
 
     // MARK: run / control
 
-    /// 起一局：settings 只用 uiLanguage 与 Switch 2 Pro 的本机转发通道；游戏语言跟系统、主机模式、宽屏 / 60 帧都由作业层定。
+    /// 起一局：settings 使用 userId / uiLanguage 与 Switch 2 Pro 的本机转发通道；游戏语言跟系统、主机模式、宽屏 / 60 帧都由作业层定。
     /// 事件：作业事件按序转出，最后一条是这局的结局（result）。
     public func run(_ game: InstalledGame, settings s: Settings, events: EventSink) throws -> RunningGame {
-        let handle = try play.play(gameId: game.gameId, uiLanguage: s.uiLanguage, arguments: Self.launchArguments(s),
+        let arguments = Self.launchArguments(s)
+        let handle = try play.play(gameId: game.gameId, userId: s.userId, uiLanguage: s.uiLanguage, arguments: arguments,
                                    onEvent: { if !$0.isFinal { events.emit(EngineEvent(job: $0)) } },
                                    onFinish: { events.emit(EngineEvent(outcome: $0)) })
-        return RunningGame(gameId: game.gameId, taskId: handle.id)
+        return RunningGame(userId: s.userId ?? "01", gameId: game.gameId, taskId: handle.id)
     }
 
     /// launch 请求里设置带的字段（作业层 pack/jobs/build.py runtime_env 读）
@@ -281,14 +289,16 @@ public final class S2ArmEngineProvider: EngineProvider {
         if let user = s.values["playerUser"] {
             arguments["player"] = ["user": user, "name": s.values["playerName"] ?? "", "folder": s.values["playerFolder"] ?? "SaveData"]
         }
+        if let localPlayers = s.values["localPlayers"] {
+            arguments["localPlayers"] = localPlayers
+        }
         return arguments
     }
 
     public func control(_ game: RunningGame, _ cmd: ControlCommand) {
         switch cmd {
         case .stop:
-            guard play.current?.id == game.taskId else { return }   // 不是这一局（已结束 / 别的局）不动
-            play.stop()
+            play.stop(taskId: game.taskId)
         }
     }
 
@@ -343,6 +353,14 @@ public final class S2ArmEngineProvider: EngineProvider {
 
     public func restorePhone(device: String? = nil, events: EventSink = .discard) async throws {
         try await installer.restorePrevious(device: device, events: events)
+    }
+
+    public func previewHost(gameId: String, device: String? = nil) async throws -> HostInstallPreview {
+        try await installer.previewHost(gameId: gameId, device: device)
+    }
+
+    public func installHost(gameId: String, confirmation: String? = nil, device: String? = nil, events: EventSink = .discard) async throws -> InstallResult {
+        try await installer.installHost(gameId: gameId, confirmation: confirmation, device: device, events: events)
     }
 
     public func removeFromPhone(gameId: String, acceptDropped: Bool = false, accept: Set<String> = [], device: String? = nil, events: EventSink = .discard) async throws -> RemoveResult {

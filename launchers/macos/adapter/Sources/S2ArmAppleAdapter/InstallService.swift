@@ -79,6 +79,26 @@ public struct DevCertStatus: Equatable {
     }
 }
 
+/// Private one-use token binds confirmation to the observed phone and candidate.
+public struct HostInstallPreview {
+    public let token: String
+    public let required: Bool
+    public let unknownInstallation: Bool
+    public let installedVersion: String
+    public let games: [String]
+    public init(result: [String: Any]) throws {
+        guard let token = result["token"] as? String, token.count == 48,
+              token.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+            throw JobClientError("安装预览无效，请重新检测。")
+        }
+        self.token = token
+        required = result["required"] as? Bool ?? true
+        unknownInstallation = result["unknownInstallation"] as? Bool ?? true
+        installedVersion = result["installedVersion"] as? String ?? ""
+        games = result["games"] as? [String] ?? []
+    }
+}
+
 /// 装好的结果。
 public struct InstallResult: Equatable {
     public let device: String
@@ -204,6 +224,22 @@ public final class InstallService {
     /// 删掉本机存的证书、描述文件和钥匙串里的密码（回到 Apple ID 签名）。
     public func devCertDelete() async throws {
         _ = try await client.perform("devCert", extra: ["action": "delete"])
+    }
+
+    public func previewHost(gameId: String, device: String? = nil) async throws -> HostInstallPreview {
+        var extra: [String: Any] = ["gameId": gameId]
+        if let device, !device.isEmpty { extra["device"] = device }
+        return try HostInstallPreview(result: await client.perform("installHostPreview", extra: extra).result)
+    }
+
+    /// Explicit host-only action. No game resource upload; unchanged hosts are no-ops.
+    public func installHost(gameId: String, confirmation: String? = nil, device: String? = nil, events: EventSink = .discard) async throws -> InstallResult {
+        var extra: [String: Any] = ["gameId": gameId]
+        if let confirmation { extra["hostConfirmation"] = confirmation }
+        if let device, !device.isEmpty { extra["device"] = device }
+        let r = try await client.perform("installHost", extra: extra, events: events).result
+        return InstallResult(device: r["device"] as? String ?? "", packFiles: (r["packFiles"] as? NSNumber)?.intValue,
+                             outputPath: r["outputPath"] as? String)
     }
 
     /// 生成给「没有签名团队」玩家用的 Xcode 引导项目，返回项目路径。

@@ -204,8 +204,8 @@ def win_oneclick(c, oneclick, extraction, fonts, out, events, log, env, line, so
 
 
 def build(c):
-    # 与 Mac prepare、显式清缓存 / 删除共用执行锁，清理不与同库编库重叠。
-    with c.lock("execution"):
+    # 执行读锁允许其他游戏游玩；构建锁限制一个构建，同款互斥。清理 / 删除取执行写锁。
+    with c.lock("execution", shared=True), c.lock("build"), c.lock("game-" + c.game()["id"]):
         return _build(c)
 
 
@@ -622,6 +622,22 @@ def usable_kit(c, gid, sid, failed=()):
     return resolve_path(kit) if want and have == want and sid not in failed else None
 
 
+def _ensure_save_identity(c, roots):
+    """已有容器件可能出自补写 save-identity.json 之前：组装容器前按游戏库目录补齐，保证 Games/<gid>/save-identity.json 进包"""
+    try:
+        catalog_data = c.catalog() if hasattr(c, "catalog") else {}
+    except AssertionError:
+        return
+    by_id = {g.get("id", "").upper(): g for g in catalog_data.get("games", []) if g.get("id")}
+    for g, r in roots.items():
+        if r and (Path(r) / "main.npdm").is_file() and not (Path(r) / "save-identity.json").is_file() and g.upper() in by_id:
+            try:
+                from saves import identity as save_identity
+                (Path(r) / "save-identity.json").write_text(json.dumps(save_identity(by_id[g.upper()]), ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+
+
 CONTAINER_DIGEST_KEY = "S2AContainerDigest"   # Info.plist：这份容器 App 的内容摘要（#845 装机跳过签名安装：install.same_app 经 s2a-devpush app-attr 读手机上的同一个键）
 
 
@@ -707,13 +723,146 @@ def incompatible_message(text, gid, names):
     return "这款和手机上已有的游戏地址空间类型不同，放不进同一个 App。"
 
 
-def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None):
+def current_root(c, gid, sid):
+    """这款当前壳对应的产物根（优先 v3 kit，回退旧版 iPhone/<gid>/artifact.json + product_root）"""
+    r = usable_kit(c, gid, sid)
+    if r is not None:
+        return r
+    meta = c.library / "iPhone" / gid.upper() / "artifact.json"
+    if meta.is_file():
+        try:
+            if json.loads(meta.read_text(encoding="utf-8")).get("shellId") == sid:
+                return product_root(c, gid)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def retained_input_roots(c, gid, sid, base, expected_games):
+    """Recover receipt-known inputs absent from an old local container manifest.
+
+    Host actions assemble privately, so an installed receipt can be newer than
+    the local base. Never just copy receipt labels onto unverified base bytes:
+    re-embed only from existing inputs whose identity matches that receipt.
+    This does not translate/rebuild game outputs or regenerate parked modules.
+    """
+    if not expected_games:
+        return {}
+    import mobile_lifecycle as lifecycle
+    try:
+        path = base / 's2a_game_inputs.json'
+        if path.is_symlink(): raise ValueError('linked input manifest')
+        known = json.loads(path.read_text()) if path.is_file() else {}
+        if not isinstance(known, dict): raise ValueError('invalid input manifest')
+    except (OSError, ValueError, TypeError):
+        raise Failure('本地容器模块记录无法读取，已停止安装。', code='container_stale')
+    roots = {}
+    for game, identity in expected_games.items():
+        if game == gid or known.get(game) == identity:
+            continue
+        root = current_root(c, game, sid)
+        if root is None or lifecycle.input_identity(root, sid) != identity:
+            raise Failure('本地容器记录落后于手机，且无法核实已安装模块 ' + game +
+                          ' 的原始输入；没有覆盖手机。请先恢复该模块对应的本地版本，不要盲目重打其它游戏。',
+                          code='container_stale')
+        roots[game] = root
+    return roots
+
+
+def _assemble_with_expected_games(c, gid, root=None, dest=None, *, expected_games=None):
+    from install import CONTAINER_DIR
+    gid = gid.upper()
+    sid = current_shell_id(c)
+    lib = contained(c.library, c.library / "iPhone" / CONTAINER_DIR)
+    base = lib / "S2Arm.app"
+    roots = {gid: root or current_root(c, gid, sid)}
+    if roots[gid] is None:
+        raise Failure("这款的 iPhone 版不是这一版 S2Arm 出的（或还没出）：先「打 iPhone 包」，再装到 iPhone。", code="container_stale")
+    if base.is_dir():
+        cat = json.loads((base / "s2a_catalogue.json").read_text(encoding="utf-8"))
+        if cat.get("shell_id") != sid:
+            stale = []
+            for e in cat.get("games", []):
+                if e["title_id"] != gid:
+                    roots[e["title_id"]] = current_root(c, e["title_id"], sid)
+                    if roots[e["title_id"]] is None:
+                        stale.append(e.get("name") or e["title_id"])
+            if stale:
+                raise Failure("S2Arm 更新过，手机上的「" + "」「".join(stale) + "」还是旧版出的：同一个 App 里的游戏要同一版，先给它们各「打 iPhone 包」一次，再装这款（手机上现有的不受影响）。", code="container_stale")
+        roots.update(retained_input_roots(c, gid, sid, base, expected_games))
+    else:
+        ipa_file = layout.phone_ipa(c)
+        other_games = sorted((set(ipa_games(ipa_file)[0] if ipa_file.is_file() else []) | set(expected_games or {})) - {gid})
+        for g in other_games:
+            r = current_root(c, g, sid)
+            if r is not None:
+                roots[g] = r
+            elif g in (expected_games or {}):
+                raise Failure("本地容器记录落后于手机，且无法核实已安装模块 " + g + " 的原始输入；没有覆盖手机。请先恢复该模块对应的本地版本，不要盲目重打其它游戏。", code="container_stale")
+    shell = container_shell(c, sid)
+    icon = c.engine / "launchers/macos/Branding/AppIcon-iOS.png"
+    if not icon.is_file():
+        icon = c.engine / "launchers/macos/Branding/AppIcon-1024.png"
+    if not icon.is_file():
+        raise Failure("这个 S2Arm 安装包不完整（缺应用图标），请重新下载 S2Arm。", code="engine_incomplete")
+    out = Path(dest) if dest else Path(tempfile.mkdtemp(prefix=".container-", dir=c.library))
+    out.mkdir(parents=True, exist_ok=True)
+    app, ipa = out / "S2Arm.app", out / "S2Arm.ipa"
+    import mobile_lifecycle as lifecycle
+    host_dir = lifecycle.host_directory(c)
+    input_ids = {g: lifecycle.input_identity(r, sid) for g, r in roots.items()} if host_dir.exists() else {}
+    tmp = Path(tempfile.mkdtemp(prefix=".container-", dir=out))
+    log = (c.private / "logs" if hasattr(c, "private") else c.logs) / (c.task + "-container.log")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import host_update
+        _ensure_save_identity(c, roots)
+        (tmp / "custom.json").write_text(json.dumps(container_custom(c), ensure_ascii=False), encoding="utf-8")
+        try:
+            c.run([os.sys.executable, "-X", "utf8", "-B", c.engine / "pack/ship_ext.py", "container", "--shell", shell, "--out", tmp / "S2Arm.app", "--bundle-id", CONTAINER_BUNDLE,
+                   "--icon", icon, "--sign", "none" if os.name == "nt" else "adhoc", "--custom", tmp / "custom.json", "--host-abi", str(host_update.HOST_ABI), *[x for r in roots.values() for x in ("--game", r)], *(["--base", base] if base.is_dir() else [])], log, c.env())
+        except Failure as e:
+            text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+            if e.code == "tool_exit" and "地址空间类型不一致" in text:
+                raise Failure("这款和手机上已有的游戏地址空间类型不同，放不进同一个 App。", code="container_incompatible") from e
+            raise
+        if host_dir.exists():
+            c.run([os.sys.executable, "-B", c.engine / "pack/ios_host.py", "apply", host_dir,
+                   tmp / "S2Arm.app", sid], log, c.env())
+            identities = {}
+            old_inputs = base / "s2a_game_inputs.json"
+            if old_inputs.is_file():
+                identities.update(json.loads(old_inputs.read_text()))
+            for game, game_root in roots.items():
+                if lifecycle.input_identity(game_root, sid) != input_ids[game]:
+                    raise Failure("组装期间游戏模块输入改变，本次没有发布或安装。请等待出包结束后重试。", code="container_stale")
+                identities[game] = input_ids[game]
+            members = {g["title_id"] for g in json.loads((tmp / "S2Arm.app/s2a_catalogue.json").read_text())["games"]}
+            identities = {g: value for g, value in identities.items() if g in members}
+            (tmp / "S2Arm.app/s2a_game_inputs.json").write_text(json.dumps(identities, sort_keys=True))
+        write_container_ipa(c, tmp / "S2Arm.app", tmp / "S2Arm.ipa", log)
+        games = [g["title_id"] for g in json.loads((tmp / "S2Arm.app/s2a_catalogue.json").read_text(encoding="utf-8"))["games"]]
+        if gid not in games:
+            raise Failure(f"这款的产物根程序号和游戏库不一致（游戏库 {gid}，组装结果 {' '.join(games)}）。", code="job_failed")
+        if dest or base.is_dir():
+            if app.exists():
+                os.replace(app, tmp / "old.app")
+            os.replace(tmp / "S2Arm.app", app)
+        os.replace(tmp / "S2Arm.ipa", ipa)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ipa, games, list(roots)
+
+
+def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None, expected_games=None):
     """现组容器（一个 App 装多款）：本版 iPhone 壳 + 这款和 others（这台手机上已有的各款）的容器件（pack/ship_ext.py container），出 S2Arm.app + S2Arm.ipa 到 dest
     （缺省游戏库同盘临时目录，由调用方装上后再放到默认位置根）。不再在上一次的底包上加款：底包和各款镜像会不一致，且换壳时要整包重出。
     gid 为 None：只组 others（从手机删一款）。哪款放不进本壳（不是本壳出的、新宿主也不认得）就报 container_stale 点名，不装半套；
     游戏库里已删的款不再带（手机上的存档还在）。root / dest：出包重叠早装用（旁路刚完成的产物根，出到临时目录）。
     agreed：设备记录 staleAgreed（#479，{壳号: [游戏号]}）——这台手机在本版壳上同意过「这次不带」的；带不进的都在里面就不再问，照不带它们装。换了壳号重新问
     → (ipa, 全部款, 壳号)。Windows 不签（--sign none，交给 plumesign）；Mac 自签，装机时再按玩家团队重签"""
+    if expected_games is not None:
+        return _assemble_with_expected_games(c, gid, root=root, dest=dest, expected_games=expected_games)
     import host_update
     sid = current_shell_id(c)
     roots = {}
@@ -765,6 +914,7 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
     app, ipa = out / "S2Arm.app", out / "S2Arm.ipa"
     log = c.logs / (c.task + "-container.log")
     shutil.rmtree(app, ignore_errors=True)
+    _ensure_save_identity(c, roots)
     (out / "custom.json").write_text(json.dumps(container_custom(c), ensure_ascii=False), encoding="utf-8")
     # 横图取游戏库那份（导入时作业层抓好，library.store_meta）：组装不联网，Mac / iPhone / Windows 读同一份
     banners = {g: layout.path(c, g, "banner.jpg", create=False) for g in roots}

@@ -13,11 +13,20 @@ import ShellUI
 /// - 虚拟手柄布局：按游戏，走 C 接口 s2a_shell_vpad_*（宿主 ios/vpad_shell.m），与游戏内拖动编辑同一份文件
 public enum S2ArmGameSettings {
     public static let fps60 = "fps60", fpsPick = "fpsPick", volume = "gameVolume", gameLanguage = "gameLanguage", fullscreen = "fullscreen", opacity = "vpadOpacity", layout = "vpadLayout", holdLock = "vpadHoldLock", identity = "gameIdentity", editIdentity = "edit"
+    public static let player1 = "playerSource.1", player2 = "playerSource.2", player3 = "playerSource.3", player4 = "playerSource.4"
     /// 社区补丁 / 金手指的行号前缀（后接补丁编号 / 「文件名/条目名」）
     public static let patchPrefix = "patch.", cheatPrefix = "cheat."
     /// 布局多选里打开二级编辑页的那一项（不是一个方案）
     public static let editLayout = "edit"
     public static let splitScreen = "splitScreen", screenOrientation = "screenOrientation"
+    public static let playerSourceOptions: [SettingOption] = [
+        SettingOption("auto", "Controller (Auto-match)"),
+        SettingOption("touch", "Virtual controller"),
+        SettingOption("keyboard", "Keyboard"),
+        SettingOption("system", "System controller (Bluetooth / MFi)"),
+        SettingOption("nspro-hid", "Switch 2 Pro (BLE)"),
+        SettingOption("disabled", "Disabled"),
+    ]
 
     /// 宿主给的这款画面与金手指选项（ios/game_options.m 的 JSON）
     public struct Options: Equatable, Sendable {
@@ -100,6 +109,7 @@ public enum S2ArmGameSettings {
     }
 
     public static func sections(for id: String, stores: Stores = .live, state: LayoutState) -> [SettingSection] {
+        let g = stores.game(id)
         let op = (stores.app.object(forKey: "S2AVPadOpacity") as? Double).map { min(1, max(0.1, $0)) } ?? 1
         var options = [SettingOption("default", "Default layout")]
         if state.hasMine { options.append(SettingOption("mine", "My layout")) }
@@ -107,6 +117,11 @@ public enum S2ArmGameSettings {
         let current = state.selected == "mine" && state.hasMine ? "mine" : "default"
         let splitValue = playChoice(splitScreen, legacy: "S2ASplitScreen", values: ["auto", "on", "off"], app: stores.app)
         let direction = playChoice(screenOrientation, legacy: "S2AScreenOrientation", values: ["auto", "landscape", "portrait"], app: stores.app)
+        func slotValue(_ slot: Int) -> String {
+            let key = "S2Arm.PlayerSource.\(slot)"
+            let raw = g?.string(forKey: key) ?? stores.app.string(forKey: key) ?? (slot == 1 ? "auto" : "disabled")
+            return playerSourceOptions.contains(where: { $0.id == raw }) ? raw : (slot == 1 ? "auto" : "disabled")
+        }
         func toggle(_ id: String, _ label: String, _ s: Options.Switch) -> SettingRow {
             SettingRow(id: id, label: label, note: s.note, kind: .toggle(on: "on", off: "off"), value: s.on ? "on" : "off", enabled: s.enabled)
         }
@@ -165,6 +180,10 @@ public enum S2ArmGameSettings {
             SettingRow(id: layout, label: "Button layout", note: "Adjust normal and split positions separately; applies to this game only", kind: .choice(options), value: current),
             SettingRow(id: holdLock, label: "Hold-lock ZL / ZR", note: "Hold for 2 s to lock, tap again to unlock; this game only", kind: .toggle(on: "on", off: "off"), value: state.holdLock ? "on" : "off"),
             SettingRow(id: opacity, label: "Button opacity", note: "Shared by all games; takes effect the next time you enter a game", kind: .range(min: 10, max: 100, step: 5, unit: "%"), value: String(Int((op * 100).rounded()))),
+            SettingRow(id: player1, label: "1P input source", note: "Supports physical controllers, virtual controller, and keyboard independently", kind: .choice(playerSourceOptions), value: slotValue(1)),
+            SettingRow(id: player2, label: "2P input source", note: "Assign the virtual controller or keyboard to 2P to play 2-player local co-op with a 1P physical controller", kind: .choice(playerSourceOptions), value: slotValue(2)),
+            SettingRow(id: player3, label: "3P input source", note: "Assign an independent input source for local multiplayer", kind: .choice(playerSourceOptions), value: slotValue(3)),
+            SettingRow(id: player4, label: "4P input source", note: "Assign an independent input source for local multiplayer", kind: .choice(playerSourceOptions), value: slotValue(4)),
         ]))
         #else
         _ = (op, options, current)
@@ -178,6 +197,23 @@ public enum S2ArmGameSettings {
         switch setting {
         case splitScreen: if ["auto", "on", "off"].contains(value) { stores.app.set(value, forKey: splitScreen); stores.app.removeObject(forKey: "S2ASplitScreen") }
         case screenOrientation: if ["auto", "landscape", "portrait"].contains(value) { stores.app.set(value, forKey: screenOrientation); stores.app.removeObject(forKey: "S2AScreenOrientation") }
+        case player1, player2, player3, player4:
+            guard playerSourceOptions.contains(where: { $0.id == value }),
+                  let slot = Int(setting.split(separator: ".").last ?? "") else { break }
+            let key = "S2Arm.PlayerSource.\(slot)"
+            stores.game(id)?.set(value, forKey: key)
+            stores.app.set(value, forKey: key)
+            if value == "touch" || value == "keyboard" {
+                for other in 1...4 where other != slot {
+                    let otherKey = "S2Arm.PlayerSource.\(other)"
+                    let cur = stores.game(id)?.string(forKey: otherKey) ?? stores.app.string(forKey: otherKey)
+                    if cur == value {
+                        let fallback = other == 1 ? "auto" : "disabled"
+                        stores.game(id)?.set(fallback, forKey: otherKey)
+                        stores.app.set(fallback, forKey: otherKey)
+                    }
+                }
+            }
         case fps60: _ = stores.setOption(id, "fps", "", value == "on")
         case fpsPick: _ = stores.setOption(id, "fpspick", value, true)
         case volume: if Int(value) != nil { _ = stores.setOption(id, "volume", value, true) }

@@ -157,6 +157,16 @@ namespace S2A.Services
             }
         }
 
+        // Versioned admission marker: descriptor/root validation and explicit
+        // account selection are implemented by this service image, not merely
+        // declared by a launcher manifest. Probed without executing the host.
+        // Both this managed marker and the NVN parser marker are required for 90 FPS admission.
+        [UnmanagedCallersOnly(EntryPoint = "S2A_FrameRateLimit_v1")]
+        public static int FrameRateLimitVersion() => 1;
+
+        [UnmanagedCallersOnly(EntryPoint = "S2A_LauncherAccount_v1")]
+        public static int LauncherAccountVersion() => 1;
+
         [UnmanagedCallersOnly(EntryPoint = "S2A_Init")]
         public static void Init()
         {

@@ -39,6 +39,8 @@ import AppKit
         do { let c = await post("/prepare", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/ipa", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/install", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
+        do { let c = await post("/installHostPreview", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
+        do { let c = await post("/installHost", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/target", ["productType": "iPhone17,1", "os": 26]).0; XCTAssertEqual(c, 400, "机型表没探过不能选") }
         do { let c = await post("/diagnostics", ["action": "x"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/cancel", ["taskId": "t"]).0; XCTAssertEqual(c, 400, "没有在跑的作业") }
@@ -46,6 +48,8 @@ import AppKit
         do { let c = await post("/fonts", ["path": ""]).0; XCTAssertEqual(c, 409) }
         do { let c = await post("/onboarding", ["action": "finish"]).0; XCTAssertEqual(c, 200, "新界面没有引导页：忽略、不报错（旧剧本照跑）") }
         do { let c = await post("/nope").0; XCTAssertEqual(c, 404) }
+        do { let c = await post("/verify", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
+        XCTAssertNil(model.playSession)
         XCTAssertNil(model.session, "上面这些一个作业都没起")
     }
 
@@ -64,7 +68,7 @@ import AppKit
             .write(to: root.appendingPathComponent("logs/jobs/t1.json"))
         let s = control.state()
         for k in ["selection", "showOnboarding", "onboardingStep", "keyStatus", "hasImportedKeys", "environmentReady", "checkingEnvironment",
-                  "checks", "games", "tasks", "queue", "notice", "error", "installReadiness", "waitingForAccess", "cachedAt", "windows", "overlays"] {
+                  "checks", "games", "tasks", "playSession", "playingGameId", "queue", "notice", "error", "installReadiness", "waitingForAccess", "cachedAt", "windows", "overlays"] {
             XCTAssertNotNil(s[k], k)
         }
         let t = (s["tasks"] as? [[String: Any]])?.first

@@ -604,6 +604,7 @@
 20261115-1312-audio-diag-peak-nan.patch
 20261115-1505-macrojit-dynamic-code-guard.patch
 20261115-1712-hid-follow-sync-same-lock.patch
+20261110-0735-launcher-session-account.patch
 20261116-1551-audio-dsp-mix-volume-round-nearest.patch
 20261116-1552-audio-dsp-biquad-and-mix-local-state.patch
 20261116-1552-audio-dsp-command-fault-isolation.patch
@@ -620,3 +621,4 @@
 20261117-1546-snapshot-hooks.patch
 20261117-2020-shared-font-read-once.patch
 20261117-1813-ampere-image-atomic-bank.patch
+20261118-1930-local-player-multiuser-applet.patch

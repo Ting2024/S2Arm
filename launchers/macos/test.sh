@@ -41,3 +41,39 @@ python3 launchers/macos/check_xctest.py build/macos/tests/frontend-discovery.log
 [ "$frontend_rc" = 0 ] || exit "$frontend_rc"
 # 原生输入（input_test.m）与系统键盘桥接（textinput_test.m）的 C / ObjC 单测挪到 tests/macos_native_input_test.sh（合入前层、按依赖文件路由；
 #   11-10：#417 Joy-Con 体感改走 HID 后 input_test 漏链 joycon_imu.m，这里只在合入后层跑，守望才发现）
+xcrun clang -std=c11 -Wall -Wextra -Werror -Imacos/controllers/include \
+  launchers/macos/Tests/controller_slots_test.c macos/controllers/S2AControllerSlots.c -o build/macos/tests/controller-slots
+xcrun clang -std=c11 -Wall -Wextra -Werror -Iruntime/include \
+  runtime/tests/t_player_input_buffer.c runtime/src/player_input_buffer.c -o build/macos/tests/player-input-buffer
+xcrun clang -std=c11 -Wall -Wextra -Werror -Iruntime/include \
+  runtime/tests/t_player_input_map.c runtime/src/player_input_map.c -o build/macos/tests/player-input-map
+ps -axo pid=,comm= > build/macos/tests/pre-player-map-processes.log
+build/macos/tests/player-input-map
+build/macos/tests/player-input-buffer
+build/macos/tests/controller-slots
+xcrun clang -std=c11 -Wall -Wextra -Werror -Imacos/controllers/include \
+  launchers/macos/Tests/nspro_test.c -o build/macos/tests/nspro
+xcrun clang -fobjc-arc -O2 -Wall -Wextra -Werror \
+  launchers/macos/Tests/motion_driver_test.m macos/controllers/S2AControllerInput.m \
+  -o build/macos/tests/motion-driver -framework Foundation -framework GameController -framework IOKit
+build/macos/tests/motion-driver
+xcrun clang -fobjc-arc -O1 -Wall -Wextra -Werror \
+  launchers/macos/Tests/system_motion_test.m macos/controllers/S2AControllerInput.m \
+  -o build/macos/tests/system-motion -framework Foundation -framework GameController -framework IOKit
+ps -axo pid=,comm= > build/macos/tests/pre-system-motion-processes.log
+build/macos/tests/system-motion
+xcrun clang -fobjc-arc -O1 -Wall -Wextra -Werror \
+  launchers/macos/Tests/system_controller_slots_test.m macos/controllers/S2ASystemControllerSlots.m \
+  macos/controllers/S2AControllerInput.m macos/controllers/S2AControllerSlots.c \
+  -o build/macos/tests/system-controller-slots -framework Foundation -framework GameController -framework IOKit
+ps -axo pid=,comm= > build/macos/tests/pre-controller-slots-processes.log
+build/macos/tests/system-controller-slots
+build/macos/tests/nspro
+swiftc launchers/macos/frontend/Sources/NX2Apple/InputKeyCapture.swift \
+  launchers/macos/Tests/key_capture_test.swift -o build/macos/tests/key-capture
+build/macos/tests/key-capture
+# Actual Mac LAN provider link/lifecycle; never starts Bonjour or touches devices.
+xcrun clang -fobjc-arc -O1 -Wall -Wextra -Wno-unused-parameter -Iruntime/include -Iruntime/src \
+  runtime/tests/t_mac_lan_link.m ios/ldn_lan.m macos/lan_permission.m runtime/src/lan_elect.c \
+  -o build/macos/tests/mac-lan-link -framework Foundation -framework AppKit
+build/macos/tests/mac-lan-link

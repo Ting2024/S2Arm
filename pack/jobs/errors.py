@@ -39,6 +39,7 @@ RECOVERY = {
     "two_factor_wrong": "两步验证码不对或已过期：重新获取验证码后输入；短信收码目前常失败，用受信任设备上弹出的验证码。",   # Windows 签装交给玩家自装的 Impactor（11-04 维护者）；引导 pack/jobs/impactor_guide.json
     "login_identity_rejected": "密码已通过，但苹果拒绝了这台电脑的登录身份：在 Impactor「设置」里点「Reset Anisette Data」后重新添加账号；仍不行就换一台电脑或稍后再试。",   # Windows 签装交给玩家自装的 Impactor（11-04 维护者）；引导 pack/jobs/impactor_guide.json
     "ipa_needs_repack": "这个包是旧版 S2Arm 出的（zip64 或中文显示名），侧载工具读不了：更新 S2Arm 后重新出包再装。",   # Windows 签装交给玩家自装的 Impactor（11-04 维护者）；引导 pack/jobs/impactor_guide.json
+    "request_invalid": "检查本次操作的设置，选择支持的选项后重试；帧率上限支持30、60、90或120。",
     "job_failed": "查看本任务的具体日志，修复提示的问题后重试；反馈时复制已脱敏的错误摘要。",
     "tool_exit": "查看本任务日志和失败阶段，按提示修复后重试；反馈时复制错误摘要。",
     "game_crashed": "再启动一次试试；还是这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上，我们按崩溃现场修。",   # Mac 起局：游戏进程中途非 0 退出（build.launch）
@@ -47,6 +48,7 @@ RECOVERY = {
     "keys_missing": "在「设置 → 玩家密钥」导入自行导出的 prod.keys，然后重新导入游戏。",
     "keys_invalid": "重新选择完整的 prod.keys 文本文件，不要手工补写密钥值；原有密钥保持不变。",
     "content_unreadable": "检查文件和票据是否完整；若另行确认 Switch 密钥版本不足，可重新导出并到「设置 → 玩家密钥」重新导入。",
+    "hash_mismatch": "若同一文件在其他模拟器可正常使用，请保留本次日志以排查读取器兼容性与校验策略差异；不要仅据此更换密钥或认定文件损坏。",
     "ticket_missing": "核对源文件是否含有所需票据。",
     "content_truncated": "从原始位置重新复制完整的游戏文件，再重新导入。",
     "keys_outdated": "用系统版本更新的 Switch 重新导出 prod.keys，再到「设置 → 玩家密钥」重新导入。",
@@ -172,6 +174,9 @@ RECOVERY = {
     'save_backup_failed': '确认后再点一次就照装：存档没备份，万一覆盖出问题可能丢档；想先备份就把手机解锁、数据线插稳后再点一次。',
     'cert_revoke_confirm': '点「仍然继续」就照签。想保住那一张，要先删掉一张不用的开发证书：有 Mac 的话，在 Mac 上 Xcode 的「设置 → 账户 → 管理证书」里删，删完回来再装一次。',
     'device_space_low': '点「仍然继续」照传：手机报的空闲不含系统随时能清掉的空间，实际多半放得下，真写满了会停下并说明还差多少；也可以先在「设置 → 通用 → iPhone 储存空间」腾出空间。',
+    'ios_host_action_required': '先单独安装／更新／续签手机 App，再推送资源；推送不会自动重装已有 App。',
+    'ios_host_unknown': '先同步并核实手机宿主版本；不要卸载 App 或重传游戏资源。设备解锁后重试，仍失败时保留诊断。',
+    'ios_host_downgrade': '更新 Mac 的 iOS 宿主组件后重试；当前手机 App、资源和存档均未改动。',
     'container_stale': '先给点名的游戏各「打 iPhone 包」一次，再装到 iPhone；也可以确认后这次先不带它们照装，它们的存档和资源留在手机上，重新出包再装就回来。',
     'container_incompatible': '这款没法和手机上已有的游戏放进同一个 App：先从 iPhone 删掉不兼容的那款。',
     'game_files_mismatch': '用原版游戏文件重新导入这款：先在游戏库里移除它，再把原版文件拖进来。',

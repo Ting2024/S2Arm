@@ -17,7 +17,7 @@ let package = Package(
     name: "NX2AppleFrontend",
     platforms: [.macOS(.v13)],
     products: [.library(name: "NX2AppleUI", targets: ["NX2AppleUI"])],
-    dependencies: [.package(path: "../adapter"), .package(path: "../../shared/SaveSync")],
+    dependencies: [.package(path: "../adapter"), .package(path: "../../shared/SaveSync"), .package(path: "../../../macos/controllers")],
     targets: [
         .target(name: "LauncherPadBridge", path: "Sources/LauncherPadBridge", publicHeadersPath: "include",
                 cSettings: [.headerSearchPath(".")],
@@ -26,7 +26,7 @@ let package = Package(
         .target(name: "NXModel", dependencies: ["NXCore"], path: "Sources/NXModel"),
         .target(name: "NXLauncher", dependencies: ["NXModel", "NXCore"], path: "Sources/NXLauncher"),
         .target(name: "NX2AppleUI",
-                dependencies: ["NXLauncher", "NXModel", "NXCore", "LauncherPadBridge", .product(name: "S2ArmAppleAdapter", package: "adapter"),
+                dependencies: ["NXLauncher", "NXModel", "NXCore", "LauncherPadBridge", .product(name: "S2ArmControllers", package: "controllers"), .product(name: "S2ArmAppleAdapter", package: "adapter"),
                                .product(name: "SaveSync", package: "SaveSync"), "Sparkle"],
                 path: "Sources/NX2Apple"),
         // 应用内更新（v0.3.10 维护者拍板：换成业界标准的 Sparkle 2，不再自写换版）：上游 2.10.1 的 Sparkle-for-Swift-Package-Manager.zip，MIT 许可见 Vendor/Sparkle-LICENSE.txt。

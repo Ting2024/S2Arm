@@ -15,6 +15,11 @@ DYLIB = sys.argv[1:2] == ['--dylib']
 if DYLIB: (dylib, bid, team), app, base = sys.argv[2:5], None, None
 else: app, bid, team, base = sys.argv[1:5]
 EXTENSION = '--extension' in sys.argv[5:]
+# Explicit host update logs must not contain profile/identity/device details.
+if os.environ.get('S2A_SIGN_PRIVATE') == '1':
+    import builtins
+    def print(*args, **kwargs):
+        builtins.print('Signing verification did not complete; private details withheld.' if any('失败' in str(x) or '没有' in str(x) or '不含' in str(x) or '不允许' in str(x) for x in args) else 'Signing step checked.')
 NEED = ['com.apple.developer.kernel.increased-memory-limit']   # 10-19 维护者定案（docs/研究/免费账号.md）：只带这一项就有整块 64 GB 窗口 + 6144 MB 内存上限；扩展寻址多余且免费账号签不了
 # 平台（11-15 tvOS 版）：S2A_SIGN_PLATFORM=tvos（pack/jobs/tvos.py 传）或 App 的 CFBundleSupportedPlatforms 写着 AppleTVOS → 只挑 tvOS 的开发描述文件
 #   （同一包名可能还有 iOS 的那份）。权限按款（pack/jobs/tvos.py entitlements_for）：「提高内存上限」照带，描述文件不允许就不带
@@ -33,6 +38,7 @@ def cms(f):
 #   全过的里面取到期最晚的；一项不过就不算这份（不是整个退 3），都不过才退 3 让调用方重申。逐项 = 没过期 / 一天内不到期、平台对（iOS / tvOS）、
 #   含 S2A_PROFILE_NEED_UDIDS 里的设备、本机钥匙串有它 DeveloperCertificates 里的签名身份、要签的每项权限都被它允许
 now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+min_rem = datetime.timedelta(hours=float(os.environ['S2A_PROFILE_MIN_HOURS'])) if os.environ.get('S2A_PROFILE_MIN_HOURS') else datetime.timedelta(days=1)
 need_udids = set(os.environ.get('S2A_PROFILE_NEED_UDIDS', '').split())
 ids = [l.split()[1] for l in subprocess.run(['security', 'find-identity', '-v', '-p', 'codesigning'], capture_output=True, text=True).stdout.split('\n') if len(l.split()) > 1 and len(l.split()[1]) == 40]
 _base = []
@@ -57,7 +63,9 @@ for f in glob.glob(os.path.join(glob.escape(os.path.expanduser('~/Library/Mobile
     name, plat = os.path.basename(f), p.get('Platform') or []
     if TVOS and 'tvOS' not in plat: continue
     if not TVOS and plat and 'iOS' not in plat: why.append(f'{name} 不是 iOS 的'); continue
-    if p['ExpirationDate'] <= now + datetime.timedelta(days=1): why.append(f'{name} 已过期或一天内到期'); continue
+    exp = p.get('ExpirationDate', datetime.datetime.min)
+    exp = exp.astimezone(datetime.timezone.utc).replace(tzinfo=None) if exp.tzinfo is not None else exp
+    if exp <= now + min_rem: why.append(f'{name} 已过期或即将到期'); continue
     miss = sorted(need_udids - set(p['ProvisionedDevices']))
     if miss: why.append(f'{name} 不含测试设备 {" ".join(miss)}'); continue
     certs = {hashlib.sha1(c).hexdigest().upper() for c in p.get('DeveloperCertificates', [])}

@@ -1657,6 +1657,28 @@ class JobsTests(unittest.TestCase):
         self.assertNotIn("S2A_ROUTE", env)
         self.assertEqual(env["S2A_RYU_DATA"], str(layout.path(self.c, game["id"], "saves")))
 
+    def test_runtime_outputs_do_not_reuse_build_caches_or_inherited_dump_paths(self):
+        injected = {key: '/not-a-runtime-destination' for key in (
+            'SW_GAL_SPV_DUMP', 'S2A_SESSION_USER', 'S2A_SAVE_DIR', 'S2A_COLD_START',
+            'DM_PSO_USER', 'NXGAL_PSO_DEV_DIR', 'TMPDIR', 'S2A_WIDEN_FLAT_CACHE')}
+        with patch.dict(os.environ, injected):
+            env = build.runtime_env(self.c, self.game(), self.root / 'runtime')
+        import users
+        outputs = users.runtime_paths(self.c, self.game()['id'])
+        for key, path in outputs.items():
+            if key == 'S2A_RYU_DATA':
+                continue
+            self.assertEqual(env[key], str(path))
+            self.assertTrue((path.parent if key in ('DM_PSO_USER', 'S2A_WIDEN_FLAT_CACHE') else path).is_dir())
+            if key in ('DM_PSO_USER', 'S2A_WIDEN_FLAT_CACHE'):
+                self.assertFalse(path.exists())  # A cache file must never be created as a directory.
+        self.assertEqual(env['S2A_RYU_DATA'], str(outputs['S2A_RYU_DATA']))
+        for key in ('SW_GAL_SPV_DUMP', 'S2A_SESSION_USER', 'S2A_SAVE_DIR', 'S2A_COLD_START'):
+            self.assertNotIn(key, env)
+        self.assertEqual(env['S2A_RUN_ROOT'], str(self.c.work_root / 'run'))
+        self.assertNotEqual(env['GAL_AIR_CACHE'], str(self.c.work_root / 'cache/air'))
+        self.assertNotEqual(env['GAL_PSO_CACHE'], str(self.c.work_root / 'cache/pso'))
+
     def test_runtime_environment_follows_system_language_and_docks_by_default(self):
         # 请求不带 gameLanguage 就不设 S2A_SYSTEM_LANGUAGE（继承来的也不带，c.env 去掉 S2A_*；宿主跟系统首选语言）；玩家在启动设置选的游戏语言走 community launch_env（11-14 维护者确认可选）；
         # 不带 docked 是主机模式，只有明说 false 才掌机
@@ -2019,17 +2041,17 @@ class JobsTests(unittest.TestCase):
         outside.mkdir()
         (outside / "m").write_bytes(b"12345")
         (root / "sub" / "ok").write_bytes(b"12345")
-        build.validate_files(self.c, root, {"sub/ok": [5, ""]}, full=False)
+        build.validate_files(self.c, root, {"sub/ok": [5, "0" * 64]}, full=False)
         with self.assertRaises(Failure):
-            build.validate_files(self.c, root, {"sub/ok": [4, ""]}, full=False)
+            build.validate_files(self.c, root, {"sub/ok": [4, "0" * 64]}, full=False)
         (root / "link").symlink_to(outside, target_is_directory=True)
         with self.assertRaises(Failure):
-            build.validate_files(self.c, root, {"link/m": [5, ""]}, full=False)
+            build.validate_files(self.c, root, {"link/m": [5, "0" * 64]}, full=False)
         (root / "sub" / "filelink").symlink_to(outside / "m")
         with self.assertRaises(Failure):
-            build.validate_files(self.c, root, {"sub/filelink": [5, ""]}, full=False)
+            build.validate_files(self.c, root, {"sub/filelink": [5, "0" * 64]}, full=False)
         with self.assertRaises(Failure):
-            build.validate_files(self.c, root, {"sub/missing": [5, ""]}, full=False)
+            build.validate_files(self.c, root, {"sub/missing": [5, "0" * 64]}, full=False)
 
     def test_cleanup_preserves_releases_saves_and_other_games_sources(self):
         package = self.package()

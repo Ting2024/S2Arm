@@ -53,6 +53,11 @@
       "type": "string",
       "minLength": 1
     },
+    "frameRateLimit": {
+      "type": "integer",
+      "enum": [30, 60, 90, 120],
+      "description": "Captured presentation ceiling for this launch; does not enable FPS patches or alter guest time."
+    },
     "vammLayout": false,
     "parentPid": {
       "type": "integer",

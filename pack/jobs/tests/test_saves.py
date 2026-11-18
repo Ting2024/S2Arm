@@ -24,6 +24,7 @@ sys.path.insert(0, str(JOBS))
 import library  # noqa: E402
 import saves  # noqa: E402
 import layout  # noqa: E402
+import users  # noqa: E402
 from core import Cancelled, Context, Failure, atomic  # noqa: E402
 
 import build  # noqa: E402
@@ -145,6 +146,156 @@ class SaveTests(unittest.TestCase):
                 z.writestr(name, content)
             for name, content in (extra or {}).items():
                 z.writestr(name, content)
+
+    def test_preview_binding_rejects_wrong_or_missing_explicit_user_before_writes(self):
+        c = self.prepare_restore()
+        self.assertRegex(c.r['previewUserBinding'], r'^[0-9a-f]{64}$')
+        before = saves.fingerprint(c, self.root)
+        for binding in ('0' * 64, None, 1, ''):
+            request = dict(c.r, userId='01', previewUserBinding=binding)
+            bad = Context(request | dict(taskId=uuid.uuid4().hex))
+            with patch.object(saves, 'recover_once', side_effect=AssertionError('recovery ran')), \
+                 patch.object(saves, 'checked_archive', side_effect=AssertionError('conversion ran')):
+                with self.assertRaises(Failure) as raised:
+                    saves.restore(bad)
+            self.assertEqual(raised.exception.code, 'save_changed')
+        c.r.update(userId='01')
+        del c.r['previewUserBinding']
+        with self.assertRaises(Failure):
+            saves.restore(c)
+        self.assertEqual(saves.fingerprint(c, self.root), before)
+        self.assertFalse((self.directory / 'library/save-transactions').exists())
+
+    def test_old_implicit_user_preview_still_restores_but_explicit_binding_is_checked(self):
+        c = self.prepare_restore()
+        del c.r['previewUserBinding']
+        self.assertTrue(saves.restore(c)['committed'])
+        self.assertEqual((self.root / PROGRESS).read_bytes(), b'checkpoint-one')
+
+    def test_binding_survives_rename_but_not_user_game_library_root_or_uid_change(self):
+        c = self.context(userId='01')
+        expected = saves.user_binding(c, self.game)
+        users.update(self.context(action='rename', userId='01', name='Renamed Fixture', revision=0))
+        self.assertEqual(saves.user_binding(self.context(userId='01'), self.game), expected)
+        users.update(self.context(action='create', name='Second Fixture', revision=1))
+        second = self.context(userId='02')
+        other = saves.user_binding(second, self.game)
+        self.assertNotEqual(other, expected)
+        self.assertNotEqual(saves.user_binding(c, self.game | dict(id='0100000000000001')), expected)
+        self.assertNotEqual(saves.user_binding(self.context(libraryId='another-library'), self.game), expected)
+        moved = self.context()
+        moved.library = self.directory / 'other-root'
+        self.assertNotEqual(saves.user_binding(moved, self.game), expected)
+        changed = self.context(userId='02')
+        changed._selected_launcher_user = users.selected(second) | dict(accountUid='a' * 32)
+        self.assertNotEqual(saves.user_binding(changed, self.game), other)
+        # A registry rename/revision change does not invalidate a captured job.
+        second.r['userId'] = '01'
+        self.assertEqual(saves.user_binding(second, self.game), other)
+
+    def test_cross_user_preview_is_rejected_before_recovery_even_for_identical_bytes(self):
+        c = self.prepare_restore()
+        users.update(self.context(action='create', name='Second Fixture', revision=0))
+        import shutil
+        second = self.context(userId='02')
+        target = users.paths(second, GID)['save']
+        shutil.copytree(self.root, target)
+        self.assertEqual(saves.fingerprint(second, target), c.r['targetFingerprint'])
+        before = saves.fingerprint(second, target)
+        c.r['userId'] = '02'
+        # New request captures 02; original preview came from 01.
+        bad = Context(c.r | dict(taskId=uuid.uuid4().hex))
+        with patch.object(saves, 'recover_once', side_effect=AssertionError('recovery ran')):
+            with self.assertRaises(Failure) as raised:
+                saves.restore(bad)
+        self.assertEqual(raised.exception.code, 'save_changed')
+        self.assertEqual(saves.fingerprint(second, target), before)
+
+    def make_recovery_fixture(self, schema=2):
+        c = self.context(operation='saveStatus')
+        root, transactions, backups = saves.locations(c, self.game)
+        token = 'b' * 32
+        transaction = transactions / token
+        previous = backups / token
+        transaction.mkdir(parents=True)
+        previous.mkdir(parents=True)
+        record = dict(schema=schema, gameId=GID, transaction=token,
+                      hadOriginal=True, phase='prepared')
+        owner = dict(schema=schema, gameId=GID, transaction=token)
+        if schema == 2:
+            record['userBinding'] = owner['userBinding'] = saves.user_binding(c, self.game)
+        atomic(transaction / 'owner.json', owner)
+        (transaction / 'new').mkdir()
+        journal = transactions / (GID + '.json')
+        atomic(journal, record)
+        return c, record, transaction, journal
+
+    def test_new_user_full_backup_rejects_foreign_uid_even_into_empty_root(self):
+        self.backup()
+        users.update(self.context(action='create', name='Second Fixture', revision=0))
+        c = self.context(operation='saveInspect', userId='02', path=str(self.archive))
+        with self.assertRaises(Failure) as raised:
+            saves.inspect(c)
+        self.assertEqual(raised.exception.code, 'save_wrong_user')
+        self.assertFalse(users.paths(c, GID)['save'].exists())
+
+    def test_explicit_second_user_round_trip_and_same_pair_lock(self):
+        import shutil
+        document = users.update(self.context(action='create', name='Second Fixture', revision=0))
+        uid = document['users'][1]['accountUid']
+        second = self.context(userId='02')
+        target = users.paths(second, GID)['save']
+        shutil.copytree(self.root, target)
+        (target / saves.PROFILE).write_text(json.dumps(dict(last_opened=uid,
+            profiles=[dict(user_id=USER), dict(user_id=uid, name='Second')])) )
+        (target / saves.SAVE_INDEX).write_bytes(synthetic_index([(1, GID, 1, uid)]))
+        source = self.directory / 'second.s2asave'
+        saves.backup(self.context(userId='02', path=str(source)))
+        (target / PROGRESS).write_bytes(b'second-current')
+        preview = saves.inspect(self.context(userId='02', path=str(source)))
+        with users.session_lock(second, GID):
+            with self.assertRaises(Failure):
+                saves.restore(self.context(userId='02', path=str(source), **preview))
+            # Other user's independent root remains accessible.
+            self.assertTrue(saves.status(self.context(userId='01'))['hasSave'])
+        result = saves.restore(self.context(userId='02', path=str(source), **preview))
+        self.assertTrue(result['committed'])
+        self.assertEqual((target / PROGRESS).read_bytes(), b'checkpoint-one')
+        self.assertEqual((self.root / PROGRESS).read_bytes(), b'checkpoint-one')
+        self.assertIn('/save-backups/users/02/', result['previousBackup'])
+
+    def test_legacy_journal_recovers_only_original_user_root(self):
+        c, record, transaction, journal = self.make_recovery_fixture(schema=1)
+        users.update(self.context(action='create', name='Second Fixture', revision=0))
+        second = self.context(userId='02')
+        # Exercise journal admission without enabling nonlegacy save operations.
+        with patch.object(saves, 'locations', return_value=saves.locations(c, self.game)):
+            with self.assertRaises(ValueError):
+                saves.journal_paths(second, self.game, record)
+        before = saves.fingerprint(c, self.root)
+        self.assertTrue(saves.recover_once(c, self.game))
+        self.assertFalse(journal.exists())
+        self.assertFalse(transaction.exists())
+        self.assertEqual(saves.fingerprint(c, self.root), before)
+
+    def test_recovery_rejects_wrong_user_binding_in_journal_or_owner_without_cleanup(self):
+        c, record, transaction, journal = self.make_recovery_fixture()
+        before = saves.fingerprint(c, self.root)
+        original_owner = (transaction / 'owner.json').read_bytes()
+        for change_owner in (False, True):
+            atomic(journal, record if change_owner else record | dict(userBinding='0' * 64))
+            (transaction / 'owner.json').write_bytes(original_owner)
+            if change_owner:
+                owner = json.loads(original_owner)
+                atomic(transaction / 'owner.json', owner | dict(userBinding='0' * 64))
+            with self.assertRaises(saves.RecoveryFailed):
+                saves.recover_once(c, self.game)
+            self.assertTrue(journal.exists())
+            self.assertTrue((transaction / 'new').exists())
+            self.assertEqual(saves.fingerprint(c, self.root), before)
+        atomic(journal, record)
+        (transaction / 'owner.json').write_bytes(original_owner)
+        self.assertTrue(saves.recover_once(c, self.game))
 
     def test_round_trip_preserves_indices_profiles_empty_dirs_and_other_data(self):
         c = self.prepare_restore()
@@ -772,12 +923,30 @@ saves.restore(c)
     def test_process_death_after_old_rename_recovers_before_launch(self):
         self.crash_restore("old")
         self.assertFalse(self.root.exists())
-        # Prove launch calls recovery before attempting to validate/start a host.
+        # Rejected admission must leave the interrupted transaction untouched.
         with patch.object(
             build, "validate_runtime", side_effect=Failure("stop before game launch")
-        ):
-            with self.assertRaises(Failure):
+        ), patch.object(saves, "recover", side_effect=AssertionError("early recovery")):
+            with self.assertRaisesRegex(Failure, "stop before game launch"):
                 build.launch(self.context(operation="launch"))
+        self.assertFalse(self.root.exists())
+
+        # Once admitted, use real filesystem recovery, and prove it finishes
+        # before runtime_env can create paths or the host can start.
+        import host_update
+
+        def after_recovery(*args, **kwargs):
+            self.assertEqual((self.root / PROGRESS).read_bytes(), b"checkpoint-two")
+            raise Failure("stop after real recovery")
+
+        c = self.context(operation="launch")
+        with patch.object(build, "validate_runtime", return_value={
+            "gameId": GID, "memoryRequirementsVersion": 2,
+        }), patch.object(host_update, "current_host", return_value=None), \
+             patch.object(build, "runtime_env", side_effect=after_recovery), \
+             patch.object(c, "run", side_effect=AssertionError("host started")):
+            with self.assertRaisesRegex(Failure, "stop after real recovery"):
+                build.launch(c)
         self.assertEqual((self.root / PROGRESS).read_bytes(), b"checkpoint-two")
 
     def test_process_death_after_new_rename_recovers_original(self):
@@ -860,6 +1029,85 @@ class ExternalImportTests(unittest.TestCase):
     def import_(self, source):
         preview = saves.inspect(self.context(operation="saveInspect", path=str(source)))
         return saves.restore(self.context(operation="saveRestore", path=str(source), **preview)), preview
+
+    def test_external_import_ignores_old_wrong_account_conversion_cache(self):
+        other = "00000000000000020000000000000000"
+        self.put(saves.PROFILE, json.dumps(dict(last_opened=other,
+                 profiles=[dict(user_id=USER), dict(user_id=other)])).encode())
+        src = self.community("old-cache", {"progress.bin": b"incoming"})
+        c = self.context()
+        import hashlib
+        key = hashlib.sha256((saves.source_digest(c, src) + saves.fingerprint(c, self.root)).encode()).hexdigest()[:32]
+        cache = self.directory / "library/save-imports" / GID / (key + ".s2asave")
+        cache.parent.mkdir(parents=True)
+        saves.write_archive(c, self.game, self.root, cache)
+        with patch.object(saves.save_formats, "detect", return_value=[]), self.assertRaises(Failure):
+            self.import_(src)
+        self.assertEqual((self.root / PROGRESS).read_bytes(), b"checkpoint-one")
+
+    def test_external_import_targets_open_account_not_first_index_owner(self):
+        other = "00000000000000020000000000000000"
+        self.put(saves.PROFILE, json.dumps(dict(last_opened=other,
+                 profiles=[dict(user_id=USER), dict(user_id=other)])).encode())
+        self.put(saves.SAVE_INDEX, synthetic_index([(1, GID, 1, USER), (2, GID, 1, other)]))
+        second = "bis/user/save/0000000000000002/0/progress.bin"
+        self.put(second, b"other-old")
+        src = self.community("raw-current", {"progress.bin": b"other-imported"})
+        with patch.object(saves.save_formats, "detect", return_value=[]):
+            self.assertTrue(self.import_(src)[0]["committed"])
+        self.assertEqual((self.root / second).read_bytes(), b"other-imported")
+        self.assertEqual((self.root / PROGRESS).read_bytes(), b"checkpoint-one")
+        self.assertEqual(json.loads((self.root / saves.PROFILE).read_text())["last_opened"], other)
+
+    def test_external_import_does_not_succeed_into_inactive_accounts_only_slot(self):
+        other = "00000000000000020000000000000000"
+        self.put(saves.PROFILE, json.dumps(dict(last_opened=other,
+                 profiles=[dict(user_id=USER), dict(user_id=other)])).encode())
+        src = self.community("raw-inactive", {"progress.bin": b"incoming"})
+        before = saves.fingerprint(self.context(), self.root)
+        with patch.object(saves.save_formats, "detect", return_value=[]), self.assertRaises(Failure):
+            self.import_(src)
+        self.assertEqual(saves.fingerprint(self.context(), self.root), before)
+
+    def test_legacy_runtime_creates_default_when_profile_is_missing(self):
+        other = "00000000000000020000000000000000"
+        self.put(saves.PROFILE, json.dumps(dict(last_opened=other,
+                 profiles=[dict(user_id=other)])).encode())
+        self.put(saves.SAVE_INDEX, synthetic_index([(1, GID, 1, other)]))
+        src = self.community("raw-missing-default", {"progress.bin": b"incoming"})
+        before = saves.fingerprint(self.context(), self.root)
+        with patch.object(saves.save_formats, "detect", return_value=[]), self.assertRaises(Failure):
+            self.import_(src)
+        self.assertEqual(saves.fingerprint(self.context(), self.root), before)
+
+    def test_explicit_import_uses_stable_uid_not_profiles_last_opened(self):
+        document = users.update(self.context(action='create', name='Second Fixture', revision=0))
+        uid = document['users'][1]['accountUid']
+        self.put(saves.PROFILE, json.dumps(dict(last_opened=USER, profiles=[
+            dict(user_id=USER, name='First'), dict(user_id=uid, name='Second')])).encode())
+        self.put(saves.SAVE_INDEX, synthetic_index([(1, GID, 1, USER), (2, GID, 1, uid)]))
+        second_progress = 'bis/user/save/0000000000000002/0/progress.bin'
+        self.put(second_progress, b'second-progress')
+        import shutil
+        c = self.context(userId='02')
+        target = users.paths(c, GID)['save']
+        shutil.copytree(self.root, target)
+        original = saves.fingerprint(c, target)
+        source = self.community('explicit-uid', {'progress.bin': b'second-import'})
+        with patch.object(saves.save_formats, 'detect', return_value=[]):
+            archive, _ = saves.external_archive(c, self.game, target, source)
+        self.assertEqual(archive.parent, users.paths(c, GID)['imports'])
+        with zipfile.ZipFile(archive) as z:
+            self.assertEqual(z.read('payload/' + second_progress), b'second-import')
+            self.assertEqual(z.read('payload/' + PROGRESS), b'checkpoint-one')
+            self.assertEqual(z.read('payload/' + saves.PROFILE), (target / saves.PROFILE).read_bytes())
+        self.assertEqual(saves.fingerprint(c, target), original)
+        # No matching profile must reject, never borrow the old last_opened UID.
+        (target / saves.PROFILE).write_text(json.dumps(dict(last_opened=USER,
+            profiles=[dict(user_id=USER, name='First')])))
+        with self.assertRaises(ValueError):
+            saves.import_target_user(lambda name: (target / name).read_bytes(), c)
+        self.assertEqual(saves.locations(c, self.game)[0], target)
 
     def test_jksv_directory_replaces_only_this_games_slot(self):
         src = self.community("JKSV", {"Synthetic game/Player - 2026-10-20/progress.bin": b"community",

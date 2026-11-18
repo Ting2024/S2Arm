@@ -16,6 +16,7 @@ struct InputSettingsSheet: View {
     @EnvironmentObject var loc: Localizer
     @Environment(\.dismiss) private var dismiss
     let gameID: String
+    let userID: String
     @State private var player = 1
     @State private var config = InputConfig.standard
     @State private var baseline = InputConfig.standard
@@ -27,7 +28,9 @@ struct InputSettingsSheet: View {
     @State private var loaded = false
     @State private var loadProblem = false
     @State private var inherited = false
+    @State private var inputRevision: [String: String]?
     @State private var selected = "A"
+    @State private var selectedPlayerSlot = "1"
     @State private var recording: String?
     @State private var saving = false
     @State private var failure: String?
@@ -37,6 +40,7 @@ struct InputSettingsSheet: View {
     init(model: S2ArmLauncherModel, gameID: String) {
         self.model = model
         self.gameID = gameID
+        self.userID = model.selectedUserID
     }
 
     private var language: String { loc.lang.sharedCode }
@@ -63,7 +67,7 @@ struct InputSettingsSheet: View {
     }
     private var names: InputNames { InputNames(text: t) }
     private var game: GameSummary? { model.games.first { $0.id == gameID } }
-    private var canSave: Bool { loaded && !saving && recording == nil && config.conflicts.isEmpty }
+    private var canSave: Bool { loaded && !loadProblem && !saving && recording == nil && config.conflicts.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -95,6 +99,7 @@ struct InputSettingsSheet: View {
                             }
                         }
                     }
+                    controllerPanel
                     options
                 }
                 .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
@@ -108,19 +113,47 @@ struct InputSettingsSheet: View {
         .background(InputKeyRecorder(active: recording != nil) { key in
             if let target = recording, let key { setKey(key, for: target) }
             recording = nil
-        })
+        }.id(recording))
         .onAppear {
             guard !loaded else { return }
             for p in 1...4 {
                 let input = model.loadInput(gameID: gameID, player: p)
                 configs[p] = input.config; baselines[p] = input.config; inheritedFlags[p] = input.inherited; problems[p] = input.problem
             }
+            let userInput = model.loadInput(gameID: gameID, userID: userID)
+            inputRevision = userInput.revision
+            if let players = userInput.config.players {
+                for p in 1...4 {
+                    configs[p]?.players = players; baselines[p]?.players = players
+                    configs[p]?.controller = nil; baselines[p]?.controller = nil
+                }
+            } else if let players = configs[1]?.players {
+                for p in 1...4 {
+                    configs[p]?.players = players; baselines[p]?.players = players
+                    configs[p]?.controller = nil; baselines[p]?.controller = nil
+                }
+            }
             config = configs[player] ?? .standard; baseline = baselines[player] ?? .standard
             loadProblem = problems[player] ?? false
             inherited = inheritedFlags[player] ?? false
             loaded = true
         }
-        .onChange(of: config) { configs[player] = $0; savedNow = false }   // 改动实时记到当前玩家的工作副本上（切玩家不丢）；改了就不是「已保存」状态
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            recording = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            recording = nil
+        }
+        .onChange(of: config) { updated in
+            configs[player] = updated
+            if let players = updated.players {
+                for p in 1...4 where p != player {
+                    configs[p]?.players = players
+                    configs[p]?.controller = nil
+                }
+            }
+            savedNow = false
+        }   // 改动实时记到当前玩家的工作副本上（切玩家不丢）；改了就不是「已保存」状态
         .onChange(of: player) { p in
             config = configs[p] ?? .standard; baseline = baselines[p] ?? .standard
             loadProblem = problems[p] ?? false
@@ -258,6 +291,104 @@ struct InputSettingsSheet: View {
     /// 「常用键」里给的键（Return、Esc、空格、Tab、Shift、Ctrl、Option）：Esc 录入时是取消键，只能从这里选。
     private static let commonKeys = [36, 53, 49, 48, 56, 59, 58]
 
+    private func controllerText(_ zh: String, _ en: String) -> String { loc.lang == .zh ? zh : en }
+    private func playerSelection(_ slot: String) -> ControllerSelection {
+        if let sel = config.players?[slot] { return sel }
+        if slot == "1" { return config.controller ?? ControllerSelection(backend: "system", device: "") }
+        return ControllerSelection(backend: "disabled", device: "")
+    }
+    private func setPlayerSelection(_ slot: String, _ selection: ControllerSelection) {
+        var players = config.players ?? [
+            "1": config.controller ?? ControllerSelection(backend: "system", device: ""),
+            "2": ControllerSelection(backend: "disabled", device: ""),
+            "3": ControllerSelection(backend: "disabled", device: ""),
+            "4": ControllerSelection(backend: "disabled", device: "")
+        ]
+        players[slot] = selection
+        config.players = players
+        config.controller = nil
+    }
+    private func playerSource(_ slot: String) -> Int {
+        let selection = playerSelection(slot)
+        return selection.source ?? (selection.backend == "disabled" ? (slot == "1" ? 2 : 5) : (slot == "1" ? 0 : 1))
+    }
+    private var controllerPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(controllerText("1P–4P 手柄分配", "1P–4P Controller assignment")).font(.headline)
+                Spacer()
+                Text(controllerText("与游戏内共用配置；关闭游戏后保存，下次启动生效", "Shared settings; close the game to save for next launch"))
+                    .font(.manrope(11.5)).foregroundStyle(.secondary)
+            }
+            LauncherSegmented(
+                options: [("1", "1P"), ("2", "2P"), ("3", "3P"), ("4", "4P")],
+                selection: selectedPlayerSlot
+            ) { slot in
+                selectedPlayerSlot = slot
+            }
+            Picker(controllerText("\(selectedPlayerSlot)P 手柄类型", "\(selectedPlayerSlot)P Controller type"), selection: Binding(
+                get: { playerSelection(selectedPlayerSlot).type ?? (playerSelection(selectedPlayerSlot).backend == "nspro-hid" ? 4 : 0) },
+                set: { type in
+                    var selection = playerSelection(selectedPlayerSlot)
+                    selection.source = playerSource(selectedPlayerSlot)
+                    selection.type = type
+                    selection.backend = type == 4 ? "nspro-hid" : "system"
+                    setPlayerSelection(selectedPlayerSlot, selection)
+                })) {
+                Text(controllerText("自动识别", "Automatic")).tag(0)
+                Text("Xbox").tag(1)
+                Text("PlayStation").tag(2)
+                Text("Nintendo Switch").tag(3)
+                Text(controllerText("北通宙斯NS模式", "Betop Zeus NS mode")).tag(4)
+            }
+            Picker(controllerText("输入来源", "Input source"), selection: Binding(
+                get: { playerSource(selectedPlayerSlot) },
+                set: { source in
+                    var selection = playerSelection(selectedPlayerSlot)
+                    selection.source = source
+                    selection.backend = selection.type == 4 ? "nspro-hid" : "system"
+                    setPlayerSelection(selectedPlayerSlot, selection)
+                })) {
+                Text(controllerText("兼容：混合输入", "Compatibility: mixed input")).tag(0)
+                Text(controllerText("仅手柄", "Controller only")).tag(1)
+                Text(controllerText("仅键盘", "Keyboard only")).tag(2)
+                if selectedPlayerSlot == "1" {
+                    Text(controllerText("键盘＋鼠标（1P）", "Keyboard + mouse (1P)")).tag(3)
+                }
+                Text(controllerText("关闭此玩家输入", "Disable this player's input")).tag(5)
+            }
+            Picker(controllerText("\(selectedPlayerSlot)P 绑定设备", "\(selectedPlayerSlot)P Device"), selection: Binding(
+                get: { playerSelection(selectedPlayerSlot).device },
+                set: {
+                    var selection = playerSelection(selectedPlayerSlot)
+                    selection.device = $0
+                    setPlayerSelection(selectedPlayerSlot, selection)
+                })) {
+                Text(controllerText("自动分配手柄", "Automatic controller assignment")).tag("")
+                Text(controllerText("不使用实体手柄", "No physical controller")).tag("none")
+                let currentID = playerSelection(selectedPlayerSlot).device
+                if !currentID.isEmpty && currentID != "none" {
+                    Text(controllerText("保留已有绑定（请在游戏内确认）", "Keep existing binding (check in game)")).tag(currentID)
+                }
+            }
+            Text(controllerText("指定实体手柄请在游戏内选择；连接标识不能跨进程复用，重连或重启后需重选。北通宙斯NS模式使用全局 HID 后端，暂不支持独立设备绑定。", "Choose a specific controller in game; connection IDs cannot be shared across processes and require reselection after reconnect or restart. Betop Zeus NS mode uses a shared HID backend without independent device binding."))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ForEach(["1", "2", "3", "4"], id: \.self) { slot in
+                    let sel = playerSelection(slot)
+                    let active = [0, 1].contains(playerSource(slot)) && sel.device != "none"
+                    Text("\(slot)P: \(active ? (sel.device.isEmpty ? controllerText("自动手柄", "Auto Pad") : controllerText("指定手柄", "Bound Pad")) : controllerText("未启用", "Off"))")
+                        .font(.manrope(11, .semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(active ? LauncherPalette.cream.opacity(0.16) : Color.white.opacity(0.05), in: Capsule())
+                        .foregroundStyle(active ? LauncherPalette.cream : .secondary)
+                }
+            }
+            Text(controllerText("多人同屏游戏启用 2P–4P 后，进入游戏按提示加入即可；游戏中也可随时按 ⌘ + , 或点左下角按钮调整 1P–4P。", "After enabling 2P–4P, join in-game when prompted; you can also press ⌘ + , or click the bottom-left button in-game to adjust 1P–4P."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     // ---- 鼠标与摇杆 ----
 
     private var options: some View {
@@ -379,7 +510,18 @@ struct InputSettingsSheet: View {
         Task {
             do {
                 try await model.saveInput(config, gameID: gameID, player: savedFor)
-                baselines[savedFor] = config; configs[savedFor] = config; saving = false
+                if savedFor == 1 {
+                    try? await model.saveInput(config, gameID: gameID, userID: userID, revision: inputRevision)
+                    inputRevision = model.loadInput(gameID: gameID, userID: userID).revision
+                }
+                baselines[savedFor] = config; configs[savedFor] = config
+                if let players = config.players {
+                    for p in 1...4 {
+                        configs[p]?.players = players; baselines[p]?.players = players
+                        configs[p]?.controller = nil; baselines[p]?.controller = nil
+                    }
+                }
+                saving = false
                 // 还停在这一位的话当前基线跟着跟上（不然「未保存」提示一直在、恢复这个键回的是保存前的旧值）；
                 //   给一句「已保存」反馈。成了不关弹窗：键位按玩家分开保存，留着继续给别的玩家改（切玩家用上面的选择器）
                 if player == savedFor {
@@ -447,10 +589,14 @@ struct InputKeyRecorder: NSViewRepresentable {
     var onKey: (KeyBinding?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSView { let v = NSView(); context.coordinator.install(v); return v }
-    func updateNSView(_ view: NSView, context: Context) { context.coordinator.parent = self }
+    func updateNSView(_ view: NSView, context: Context) {
+        if context.coordinator.parent.active != active { context.coordinator.capture.reset() }
+        context.coordinator.parent = self
+    }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.remove() }
 
     final class Coordinator {
+        var capture = InputKeyCapture()
         var parent: InputKeyRecorder
         var monitor: Any?
         weak var view: NSView?
@@ -458,18 +604,19 @@ struct InputKeyRecorder: NSViewRepresentable {
         func install(_ v: NSView) {
             view = v
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] e in
-                guard let self, self.parent.active, NSApp.isActive, self.view?.window?.isKeyWindow == true else { return e }
-                if e.type == .keyUp { return nil }
-                if e.modifierFlags.contains(.command) { return e }
-                let code = [60: 56, 62: 59, 61: 58][Int(e.keyCode)] ?? Int(e.keyCode)
-                var mods = (e.modifierFlags.contains(.shift) ? 1 : 0) | (e.modifierFlags.contains(.control) ? 2 : 0) | (e.modifierFlags.contains(.option) ? 4 : 0)
-                if e.type == .flagsChanged {
-                    let bit = code == 56 ? 1 : code == 59 ? 2 : code == 58 ? 4 : 0
-                    if bit == 0 || mods & bit == 0 { return e }   // 松开修饰键不算
-                    mods = 0
+                guard let self else { return e }
+                guard self.parent.active, NSApp.isActive, self.view?.window?.isKeyWindow == true else {
+                    self.capture.reset(); return e
                 }
-                let key: KeyBinding? = e.type == .keyDown && code == 53 ? nil : KeyBinding(code: code, modifiers: mods)
-                DispatchQueue.main.async { self.parent.onKey(key) }
+                if e.type == .keyUp { return nil }
+                if e.modifierFlags.contains(.command) { self.capture.reset(); return e }
+                let mods = (e.modifierFlags.contains(.shift) ? 1 : 0) | (e.modifierFlags.contains(.control) ? 2 : 0) | (e.modifierFlags.contains(.option) ? 4 : 0)
+                guard let result = self.capture.event(code: Int(e.keyCode), modifiers: mods,
+                    flagsChanged: e.type == .flagsChanged, repeatKey: e.type == .keyDown && e.isARepeat) else { return nil }
+                switch result {
+                case .cancel: self.parent.onKey(nil)
+                case let .bind(code, modifiers): self.parent.onKey(KeyBinding(code: code, modifiers: modifiers))
+                }
                 return nil
             }
         }

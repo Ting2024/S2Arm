@@ -457,6 +457,7 @@ static void input_empty(s2a_input_config *c) {
     for (int i = 0; i < S2A_INPUT_TARGET_COUNT; i++) c->keyboard[i].code = c->mouse[i] = c->gamepad[i] = -1;
     for (int i = 0; i < 4; i++) c->axes[i].source = -1;
     c->back_buttons[0] = c->back_buttons[1] = -1;
+    for (int i = 0; i < S2A_INPUT_PLAYER_COUNT; i++) c->players[i].backend = 3;
     c->recenter = c->mouse_camera = 1; c->deadzone = .15; c->sensitivity_x = c->sensitivity_y = 1;
 }
 void s2a_input_config_default(s2a_input_config *out) {
@@ -496,10 +497,36 @@ static int input_bool(const ic_json_field *f, int fallback, int *value) {
 static int input_object(const ic_json_field *f, ic_json_object *o) {
     return f && f->kind == IC_JSON_OBJECT && ic_json_parse_object(f->raw, f->raw_bytes, o, NULL, 0) == IC_JSON_OK;
 }
+static int input_controller(const ic_json_field *f, s2a_input_controller *out, int allow_auto, int slot) {
+    ic_json_object object;
+    if (!input_object(f, &object)) return 0;
+    const ic_json_field *type = ic_json_get(&object, "type");
+    int type_index = 0;
+    const ic_json_field *source = ic_json_get(&object, "source");
+    int source_index = 0;
+    if (allow_auto && object.count != 2 + (type != NULL) + (source != NULL)) return 0;
+    if (source && (!input_integer(source, 5, &source_index) || source_index == 4 || (source_index == 3 && slot != 0))) return 0;
+    if (type && !input_integer(type, 4, &type_index)) return 0;
+    const ic_json_field *backend = ic_json_get(&object, "backend");
+    const ic_json_field *device = ic_json_get(&object, "device");
+    if (input_string(backend, "system")) out->backend = 0;
+    else if (input_string(backend, "nspro-hid")) out->backend = 1;
+    else if (input_string(backend, "disabled")) out->backend = 2;
+    else if (allow_auto && input_string(backend, "auto")) out->backend = 3;
+    else if (allow_auto && input_string(backend, "touch")) out->backend = 4;
+    else if (allow_auto && input_string(backend, "keyboard")) out->backend = 5;
+    else return 0;
+    if (type && out->backend != 2 && ((type_index == 4) != (out->backend == 1))) return 0;
+    // MNG consumes the persisted slot type; the sampler backend ABI is unchanged.
+    if (!device || device->kind != IC_JSON_STRING || device->text_bytes >= sizeof out->device ||
+        strlen(device->text) != device->text_bytes) return 0;
+    memcpy(out->device, device->text, device->text_bytes + 1);
+    return 1;
+}
 const char *s2a_input_config_error_message(int e) {
     static const char *const messages[] = {"ok", "invalid input JSON", "unsupported input schema", "incomplete input config",
-        "invalid input target", "invalid input binding", "duplicate input binding", "input value out of range", "cannot read input config"};
-    return e >= 0 && e <= S2A_INPUT_CONFIG_IO ? messages[e] : "unknown input config error";
+        "invalid input target", "invalid input binding", "duplicate input binding", "input value out of range", "cannot read input config", "host does not support independent player input"};
+    return e >= 0 && e <= S2A_INPUT_CONFIG_PLAYERS_UNSUPPORTED ? messages[e] : "unknown input config error";
 }
 int s2a_input_config_parse(const char *json, size_t bytes, s2a_input_config *out) {
     if (!out || !json || !bytes || bytes > S2A_INPUT_CONFIG_MAX_BYTES) return S2A_INPUT_CONFIG_JSON;
@@ -572,6 +599,24 @@ int s2a_input_config_parse(const char *json, size_t bytes, s2a_input_config *out
     if (!input_bool(ic_json_get(&options, "invertX"), 0, &result.invert_x) ||
         !input_bool(ic_json_get(&options, "invertY"), 0, &result.invert_y) ||
         !input_bool(ic_json_get(&options, "recenter"), 1, &result.recenter)) return S2A_INPUT_CONFIG_BINDING;
+    f = ic_json_get(&root, "controller");
+    if (f) {
+        s2a_input_controller legacy = {0};
+        if (!input_controller(f, &legacy, 0, 0)) return S2A_INPUT_CONFIG_BINDING;
+        result.controller_backend = legacy.backend;
+        memcpy(result.controller_device, legacy.device, sizeof legacy.device);
+    }
+    const ic_json_field *players = ic_json_get(&root, "players");
+    if (players) {
+        ic_json_object object;
+        if (f || !input_object(players, &object) || object.count != S2A_INPUT_PLAYER_COUNT)
+            return S2A_INPUT_CONFIG_BINDING;
+        const char *const slots[] = {"1", "2", "3", "4"};
+        for (int i = 0; i < S2A_INPUT_PLAYER_COUNT; i++)
+            if (!input_controller(ic_json_get(&object, slots[i]), &result.players[i], 1, i))
+                return S2A_INPUT_CONFIG_BINDING;
+        result.players_present = 1;
+    }
     *out = result;
     return S2A_INPUT_CONFIG_OK;
 }

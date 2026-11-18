@@ -148,10 +148,12 @@ static UILabel *label(CGFloat size, UIFontWeight w, UIColor *c) {
     [col.widthAnchor constraintEqualToConstant:520].priority = UILayoutPriorityDefaultHigh;
     return self;
 }
+static S2ALoadPage *g_page;
 - (void)refresh {
     s2a_load_view v; s2a_load_snapshot(now_ns(), &v);
     if (v.stage == S2A_LOAD_DONE) { [self.timer invalidate]; self.timer = nil;
-        [UIView animateWithDuration:0.35 animations:^{ self.alpha = 0; } completion:^(BOOL f) { (void)f; [self removeFromSuperview]; }]; return; }
+        __weak S2ALoadPage *wself = self;
+        [UIView animateWithDuration:0.35 animations:^{ self.alpha = 0; } completion:^(BOOL f) { (void)f; S2ALoadPage *s = wself; [s removeFromSuperview]; if (g_page == s) g_page = nil; }]; return; }
     if (!self.firstRun) return;
     [self.bar setProgress:(float)v.frac animated:YES];
     for (int i = 0; i < 3; i++) {
@@ -172,10 +174,10 @@ static UILabel *label(CGFloat size, UIFontWeight w, UIColor *c) {
 }
 @end
 
-static S2ALoadPage *g_page;
 // 场景连上、根视图建好时调（ios/app.m）：首次与否取模型（host_main.c main 里 s2a_load_begin 定）
 void s2a_loadpage_attach(UIView *root) {
-    if (g_page || !root) return;
+    if (!root) return;
+    if (g_page) { [g_page.timer invalidate]; g_page.timer = nil; [g_page removeFromSuperview]; g_page = nil; }
     s2a_load_view v; s2a_load_snapshot(now_ns(), &v);
     if (v.stage == S2A_LOAD_DONE) return;
     g_page = [[S2ALoadPage alloc] initWithFrame:root.bounds firstRun:v.first_run];

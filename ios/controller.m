@@ -9,6 +9,9 @@
 #include "s2a_pad.h"
 #include "s2a_unattended.h"
 #include "motion_pick.h"   // 玩家 1 六轴来源仲裁（纯函数，单测 t_motion_pick）
+#include "s2a_player_input.h"
+#include "input_config.h"
+#include "vpad.h"
 #include "NS2Module.h"
 #include "pad_liveness.h"
 #include "haptic_retry.h"
@@ -357,8 +360,125 @@ static BOOL write_record(NSString *identifier, BOOL automatic) {
     LOG("手柄记忆：已保存本 App 记录，自动连接 %s", automatic ? "开" : "关"); return YES;
 }
 
-// 手柄 / 触屏按最后一次输入切换（维护者 10-24）：实体手柄输入可能把生效来源从触屏切回手柄（pad.c 触屏接管），
-//   这里在输入队列 / BLE 回调里发现变化后派回主线程更新虚拟按键显示；没变时只读一个原子量
+// 手柄 / 触屏 / 键盘 1P-4P 独立输入源快照：与 s2a_player_input_read_v1 对齐
+typedef struct {
+    int connected;
+    uint32_t buttons, latch;
+    int32_t axes[4];
+    char vendor[128];
+} s2a_phys_pad_entry;
+static pthread_mutex_t g_player_mu = PTHREAD_MUTEX_INITIALIZER;
+static s2a_phys_pad_entry g_sys_pads[4];
+static int g_sys_pad_count;
+static s2a_phys_pad_entry g_ble_pad;
+static uint8_t g_kb_mac_keys[128];
+static unsigned g_kb_modifiers;
+static int g_kb_connected;
+
+static void ble_slot_update(int connected, uint32_t buttons, const int32_t axes[4]) {
+    pthread_mutex_lock(&g_player_mu);
+    if (!connected) {
+        memset(&g_ble_pad, 0, sizeof g_ble_pad);
+    } else {
+        buttons &= 0xffffu;
+        g_ble_pad.latch |= buttons & ~g_ble_pad.buttons;
+        g_ble_pad.buttons = buttons;
+        g_ble_pad.connected = 1;
+        if (axes) memcpy(g_ble_pad.axes, axes, sizeof g_ble_pad.axes);
+        else memset(g_ble_pad.axes, 0, sizeof g_ble_pad.axes);
+    }
+    pthread_mutex_unlock(&g_player_mu);
+}
+
+static void sample_gc_pad(GCExtendedGamepad *pad, uint32_t *out_buttons, int32_t out_axes[4]) {
+    GCControllerButtonInput *options = pad.buttonOptions;
+    GCControllerButtonInput *face[4] = {pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY};
+    int order[4]; s2a_pad_abxy_order(s2a_pad_kind(pad.controller.productCategory.UTF8String, [pad isKindOfClass:GCXboxGamepad.class],
+        [pad isKindOfClass:GCDualShockGamepad.class] || [pad isKindOfClass:GCDualSenseGamepad.class]), s2a_pad_layout(), order);
+    GCControllerButtonInput *keys[16] = {face[order[0]], face[order[1]], face[order[2]], face[order[3]],
+        pad.leftThumbstickButton, pad.rightThumbstickButton, pad.leftShoulder, pad.rightShoulder,
+        pad.leftTrigger, pad.rightTrigger, pad.buttonMenu, options,
+        pad.dpad.left, pad.dpad.up, pad.dpad.right, pad.dpad.down};
+    uint32_t buttons = 0;
+    for (int i = 0; i < 16; i++) if (keys[i].isPressed) buttons |= 1u << i;
+    int32_t axes[4];
+    s2a_pad_stick(pad.leftThumbstick.xAxis.value, pad.leftThumbstick.yAxis.value, axes);
+    s2a_pad_stick(pad.rightThumbstick.xAxis.value, pad.rightThumbstick.yAxis.value, axes + 2);
+    if (out_buttons) *out_buttons = buttons;
+    if (out_axes) memcpy(out_axes, axes, sizeof axes);
+}
+
+static void refresh_all_gc_pads(BOOL foreground) {
+    if (!foreground) {
+        pthread_mutex_lock(&g_player_mu);
+        memset(g_sys_pads, 0, sizeof g_sys_pads);
+        g_sys_pad_count = 0;
+        pthread_mutex_unlock(&g_player_mu);
+        return;
+    }
+    NSArray<GCController *> *controllers = GCController.controllers;
+    s2a_phys_pad_entry snap[4];
+    memset(snap, 0, sizeof snap);
+    int count = 0;
+    for (GCController *c in controllers) {
+        if (count >= 4) break;
+        GCExtendedGamepad *pad = c.extendedGamepad;
+        if (!pad) continue;
+        uint32_t b = 0; int32_t ax[4] = {0};
+        sample_gc_pad(pad, &b, ax);
+        snap[count].connected = 1;
+        snap[count].buttons = b & 0xffffu;
+        memcpy(snap[count].axes, ax, sizeof ax);
+        const char *vn = c.vendorName.UTF8String ?: "GameController";
+        strncpy(snap[count].vendor, vn, sizeof(snap[count].vendor) - 1);
+        count++;
+    }
+    pthread_mutex_lock(&g_player_mu);
+    for (int i = 0; i < count; i++) {
+        uint32_t prev = (i < g_sys_pad_count && !strcmp(g_sys_pads[i].vendor, snap[i].vendor)) ? g_sys_pads[i].buttons : 0;
+        uint32_t latch = (i < g_sys_pad_count && !strcmp(g_sys_pads[i].vendor, snap[i].vendor)) ? g_sys_pads[i].latch : 0;
+        snap[i].latch = latch | (snap[i].buttons & ~prev);
+    }
+    memcpy(g_sys_pads, snap, sizeof snap);
+    g_sys_pad_count = count;
+    pthread_mutex_unlock(&g_player_mu);
+}
+
+static int hid_usage_to_mac_keycode(long usage) {
+    static const unsigned char mac_to_hid[128] = {
+        [0]=4,[1]=22,[2]=7,[3]=9,[4]=11,[5]=10,[6]=29,[7]=27,[8]=6,[9]=25,
+        [11]=5,[12]=20,[13]=26,[14]=8,[15]=21,[16]=28,[17]=23,
+        [18]=30,[19]=31,[20]=32,[21]=33,[22]=35,[23]=34,[24]=46,[25]=38,
+        [26]=36,[27]=45,[28]=37,[29]=39,[30]=48,[31]=18,[32]=24,[33]=47,
+        [34]=12,[35]=19,[36]=40,[37]=15,[38]=13,[39]=52,[40]=14,[41]=51,
+        [42]=49,[43]=54,[44]=56,[45]=17,[46]=16,[47]=55,[48]=43,[49]=44,
+        [50]=53,[51]=42,[53]=41,[54]=231,[55]=227,[56]=225,[57]=57,
+        [58]=226,[59]=224,[60]=229,[61]=230,[62]=228,
+        [65]=99,[67]=85,[69]=87,[71]=83,[75]=84,[76]=88,[78]=86,[81]=103,
+        [82]=98,[83]=89,[84]=90,[85]=91,[86]=92,[87]=93,[88]=94,[89]=95,[91]=96,[92]=97,
+        [96]=62,[97]=63,[98]=64,[99]=60,[100]=65,[101]=66,[103]=68,[105]=104,
+        [106]=107,[107]=105,[109]=67,[111]=69,[113]=106,[114]=73,[115]=74,
+        [116]=75,[117]=76,[118]=61,[119]=77,[120]=59,[121]=78,[122]=58,
+        [123]=80,[124]=79,[125]=81,[126]=82
+    };
+    if (usage <= 0 || usage >= 256) return -1;
+    for (int m = 0; m < 128; m++) if (mac_to_hid[m] == usage) return m;
+    return -1;
+}
+
+static BOOL any_slot_uses_vpad(BOOL has_physical_pad) {
+    const s2a_input_config *cfg = s2a_ios_input_config_current();
+    if (!cfg || !cfg->players_present) return !has_physical_pad;
+    BOOL explicit_touch = NO;
+    for (int s = 0; s < S2A_INPUT_PLAYER_COUNT; s++) {
+        if (cfg->players[s].backend == 4) { explicit_touch = YES; break; }
+    }
+    if (explicit_touch) return YES;
+    int b0 = cfg->players[0].backend;
+    if ((b0 == 3 || b0 == 0) && !has_physical_pad) return YES;
+    return NO;
+}
+
 static _Atomic int g_shown_external = -1;   // 虚拟按键当前按「实体手柄生效」隐藏着（1）/ 显示着（0）
 static void pad_selection_check(void);
 static void pad_face_sync(void);
@@ -440,6 +560,7 @@ static void ble_input(const ns2_state *state, void *context) {
             for (int i = 0; i < 4; i++) atomic_store(&g_slot_sticks[slot][i], axes[i]);
             atomic_store(&g_slot_buttons[slot], (uint32_t)state->buttons & S2A_PAD_KEYS);
         }   // -1：刚连上还没分槽，丢这一帧（分槽在主线程 bleStatus → selectSystem）
+        ble_slot_update(1, (uint32_t)state->buttons, axes);
     }
     pthread_mutex_unlock(&g_feedback_mu);
     pad_selection_check();
@@ -453,6 +574,8 @@ static void ble_status(ns2_status status, const char *message, void *context) {
     if (ready && !was) atomic_fetch_add(&g_feedback_session, 1);
     atomic_store(&g_ble_ready, ready);
     if (!ready) ble_slot_set_locked(-1);   // 就绪时不直接当玩家 1：等 selectSystem 分槽（#1428）
+    int32_t axes[4] = {0};
+    ble_slot_update(ready, 0, axes);
     pthread_mutex_unlock(&g_feedback_mu);
     pad_selection_check();
     NSString *text = [NSString stringWithUTF8String:message ?: ""];
@@ -471,6 +594,7 @@ static void log_controllers(int why);   // 下面 systemChanged 旁：GameContro
     void (^_touchEnabled)(BOOL);
     dispatch_queue_t _inputQueue;
     GCController *_system; // 仅 inputQueue 访问。
+    GCKeyboard *_keyboard;
     uint64_t _systemRev;      // 仅 inputQueue 访问：断开复查代次，旧 timer 靠它作废。
     BOOL _systemRecheck;      // 仅 inputQueue 访问：已排了一次延迟复查。
     // 仅 inputQueue 访问：各槽的手柄身份与强引用。手柄蓝牙休眠 / 断开时系统会释放 GCController，只存裸指针会变悬空（同 front_mac.m pad_owner），
@@ -489,10 +613,57 @@ static void log_controllers(int why);   // 下面 systemChanged 旁：GameContro
     s2a_rumble_apply_settings();
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(systemChanged:) name:GCControllerDidConnectNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(systemChanged:) name:GCControllerDidDisconnectNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(keyboardChanged:) name:GCKeyboardDidConnectNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(keyboardChanged:) name:GCKeyboardDidDisconnectNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(settingsChanged:) name:NSUserDefaultsDidChangeNotification object:nil];
     pad_face_sync();
     log_controllers(0);
+    [self attachKeyboard:GCKeyboard.coalescedKeyboard];
     return self;
+}
+- (void)attachKeyboard:(GCKeyboard *)kb {
+    _keyboard.keyboardInput.keyChangedHandler = nil;
+    _keyboard = kb;
+    pthread_mutex_lock(&g_player_mu);
+    g_kb_connected = kb != nil;
+    memset(g_kb_mac_keys, 0, sizeof g_kb_mac_keys);
+    g_kb_modifiers = 0;
+    pthread_mutex_unlock(&g_player_mu);
+    if (!kb) return;
+    kb.handlerQueue = dispatch_get_main_queue();
+    __weak S2AController *weakSelf = self;
+    kb.keyboardInput.keyChangedHandler = ^(GCKeyboardInput *input, GCControllerButtonInput *button, GCKeyCode keyCode, BOOL pressed) {
+        (void)button;
+        S2AController *owner = weakSelf;
+        if (!owner || !owner->_foreground || input != owner->_keyboard.keyboardInput) return;
+        int macCode = hid_usage_to_mac_keycode((long)keyCode);
+        pthread_mutex_lock(&g_player_mu);
+        if (macCode >= 0 && macCode < 128) g_kb_mac_keys[macCode] = pressed ? 1 : 0;
+        unsigned mod = 0;
+        if (g_kb_mac_keys[56] || g_kb_mac_keys[60]) mod |= 1u;
+        if (g_kb_mac_keys[59] || g_kb_mac_keys[62]) mod |= 2u;
+        if (g_kb_mac_keys[58] || g_kb_mac_keys[61]) mod |= 4u;
+        if (g_kb_mac_keys[55] || g_kb_mac_keys[54]) mod |= 8u;
+        g_kb_modifiers = mod;
+        pthread_mutex_unlock(&g_player_mu);
+        s2a_pad_wake();
+    };
+}
+- (void)keyboardChanged:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self attachKeyboard:GCKeyboard.coalescedKeyboard];
+    });
+}
+- (void)attachToRoot:(UIView *)root touchEnabled:(void (^)(BOOL))callback {
+    _root = root;
+    _touchEnabled = [callback copy];
+    if (_connect) {
+        [_connect removeFromSuperview];
+        _connect = nil;
+        if (_adapterEnabled) [self createConnectionButton];
+    }
+    [self updateVisibility];
 }
 - (void)createConnectionButton {
     UIView *root = _root;
@@ -566,7 +737,11 @@ static void pad_face_sync(void) {
         phone_refresh_availability();
         BOOL previous = self->_adapterEnabled;
         [self reloadAdapterPreference];
-        if (previous == self->_adapterEnabled) return;
+        if (previous == self->_adapterEnabled) {
+            [self updateVisibility];
+            s2a_pad_wake();
+            return;
+        }
         if (self->_adapterEnabled) [self reloadRecord];
         [self selectSystem];
         // 玩家刚打开适配（设置页或齿轮菜单）：直接开始连接，不用再点一次连接按钮；记得手柄就直连它，否则扫描配对广播
@@ -593,15 +768,18 @@ static void pad_face_sync(void) {
     }
 }
 - (void)updateVisibility {
-    BOOL external = s2a_pad_has_controller();
+    BOOL hasPhysical = s2a_pad_has_controller() || atomic_load(&g_ble_ready);
+    BOOL showTouch = any_slot_uses_vpad(hasPhysical);
+    BOOL external = hasPhysical && !showTouch;
     atomic_store(&g_shown_external, external);
-    _connect.hidden = !_adapterEnabled || !_foreground || external;
-    _touchEnabled(_foreground && !external);
+    _connect.hidden = !_adapterEnabled || !_foreground || atomic_load(&g_ble_ready);
+    _touchEnabled(_foreground && showTouch);
 }
 - (void)publishSystem:(GCExtendedGamepad *)pad {
     uint32_t buttons; int32_t axes[4];
     sample_extended(pad, &buttons, axes);
     s2a_pad_update(S2A_PAD_SYSTEM, 1, buttons, axes);
+    refresh_all_gc_pads(YES);
     pad_selection_check();
 }
 // 槽 1–3 采一次写进原子量（空槽 / 后台写零）。只在 inputQueue 上跑
@@ -651,9 +829,12 @@ static void pad_face_sync(void) {
         if (!next) continue;
         prepare_pad(next, _inputQueue);
         next.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *pad, GCControllerElement *element) {
+            (void)element;
             S2AController *owner = weakSelf;
             if (!owner) return;
             for (int k = 1; k < S2A_IOS_MAX_PADS; k++) if (owner->_slotOwner[k].extendedGamepad == pad) { [owner publishSlot:k]; break; }
+            refresh_all_gc_pads(YES);
+            s2a_pad_wake();
         };
         LOG("系统手柄：%s 接入玩家 %d", next.vendorName.UTF8String ?: "GameController", i + 1);
     }
@@ -675,8 +856,10 @@ static void pad_face_sync(void) {
     prepare_pad(next, _inputQueue);   // 回调队列 + 「-」「Home」关系统手势
     __weak S2AController *weakSelf = self;
     next.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *pad, GCControllerElement *element) {
+        (void)element;
         S2AController *owner = weakSelf;
-        if (owner && pad == owner->_system.extendedGamepad) [owner publishSystem:pad];
+        if (!owner || pad != owner->_system.extendedGamepad) return;
+        [owner publishSystem:pad];
     };
     LOG("系统手柄：接入 %s", next.vendorName.UTF8String ?: "GameController");
 }
@@ -690,6 +873,7 @@ static void pad_face_sync(void) {
     s2a_ios_slot_feedback_owner(0, nil);   // 玩家 1 的体感跟着摘（样本清零，s2a_pad_read_motion 自然回落）
     old.extendedGamepad.valueChangedHandler = nil;
     s2a_pad_update(S2A_PAD_SYSTEM, 0, 0, NULL);
+    refresh_all_gc_pads(NO);
 }
 // 第一次发现当前手柄不可用：不立刻清零，S2A_SYSTEM_RECHECK_MS 后复查一次。只在 inputQueue 上跑。
 - (void)scheduleSystemRecheck {
@@ -775,6 +959,7 @@ static void log_controllers(int why) {   // why：0 启动时、1 连接通知�
     pthread_mutex_lock(&g_feedback_mu);
     atomic_fetch_add(&g_session, 1); atomic_store(&g_ble_ready, 0);
     ble_slot_set_locked(-1);   // 让出槽（玩家 1 交回 pad.c、玩家 2–4 槽清零）；空出的槽留给下一只，下次分槽生效
+    ble_slot_update(0, 0, NULL);
     pthread_mutex_unlock(&g_feedback_mu);
     atomic_load(&g_ns2)->shutdown(reason, 0); // 不在主线程等待电机或连接完成。
     s2a_pad_wake();
@@ -878,8 +1063,15 @@ static void log_controllers(int why) {   // why：0 启动时、1 连接通知�
             _blePaused = YES;
             _bleBusy = NO;
             s2a_pad_update(S2A_PAD_BLE, 0, 0, NULL);
+            ble_slot_update(0, 0, NULL);
             LOG("NS2 Pro：后台暂停输入和反馈，保留 BLE 链路候选");
         } else [self stopBLE:"scene background before a retainable link"];
+    }
+    if (!foreground) {
+        pthread_mutex_lock(&g_player_mu);
+        memset(g_kb_mac_keys, 0, sizeof g_kb_mac_keys);
+        g_kb_modifiers = 0;
+        pthread_mutex_unlock(&g_player_mu);
     }
     [self selectSystem];
     system_sync_selection();
@@ -902,16 +1094,16 @@ static void menu_hold_check(void) {
 static void pad_selection_check(void) {
     menu_hold_check();
     system_sync_selection();
-    int external = s2a_pad_has_controller();
-    if (atomic_load(&g_shown_external) != external) dispatch_async(dispatch_get_main_queue(), ^{ [g_controller updateVisibility]; });
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_controller updateVisibility]; });
 }
-// 屏幕被碰（含虚拟按键隐藏时碰到游戏画面）：连着实体手柄时改由触屏生效、显示虚拟按键。只观察、不拦截任何触摸
+// 屏幕被碰（含虚拟按键隐藏时碰到游戏画面）：只有在槽位未显式配置或某槽位选择了虚拟手柄时才允许触屏接管。只观察、不拦截任何触摸
 @interface S2ATouchWatch : UIGestureRecognizer
 @end
 @implementation S2ATouchWatch
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)touches; (void)event;
-    if (s2a_pad_prefer_touch()) {
+    BOOL hasPhysical = g_system_present || atomic_load(&g_ble_ready);
+    if (any_slot_uses_vpad(hasPhysical) && s2a_pad_prefer_touch()) {
         system_sync_selection();
         pthread_mutex_lock(&g_feedback_mu);
         if (atomic_load(&g_ble_ready)) {
@@ -925,9 +1117,13 @@ static void pad_selection_check(void) {
 }
 @end
 void s2a_controller_attach(UIView *root, void (^touchEnabled)(BOOL)) {
-    if (g_controller) return;
-    g_controller = [[S2AController alloc] initWithRoot:root touchEnabled:touchEnabled];
-    [g_controller setForeground:YES];
+    if (g_controller) {
+        [g_controller attachToRoot:root touchEnabled:touchEnabled];
+        [g_controller setForeground:YES];
+    } else {
+        g_controller = [[S2AController alloc] initWithRoot:root touchEnabled:touchEnabled];
+        [g_controller setForeground:YES];
+    }
     S2ATouchWatch *watch = [S2ATouchWatch new];   // 不吃游戏 / 虚拟按键的触摸（同 diag.m 四指长按的设法）
     watch.cancelsTouchesInView = NO; watch.delaysTouchesBegan = NO; watch.delaysTouchesEnded = NO;
     [root addGestureRecognizer:watch];
@@ -1236,4 +1432,132 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_mot
         return 1;
     }
     return 0;
+}
+
+__attribute__((visibility("default"), used)) int s2a_player_input_read_v1(s2a_player_input_frame *out, uint32_t capacity) {
+    if (!out || capacity < sizeof(*out)) return 0;
+    *out = (s2a_player_input_frame){
+        .version = S2A_PLAYER_INPUT_VERSION,
+        .bytes = sizeof(*out),
+        .active = atomic_load(&g_ble_foreground) ? 1u : 0u,
+    };
+    const s2a_input_config *cfg = s2a_ios_input_config_current();
+    s2a_phys_pad_entry sys_pads[4];
+    int sys_count = 0;
+    s2a_phys_pad_entry ble_pad = {0};
+    unsigned char kb_keys[128];
+    unsigned kb_mods = 0;
+
+    pthread_mutex_lock(&g_player_mu);
+    memcpy(sys_pads, g_sys_pads, sizeof sys_pads);
+    sys_count = g_sys_pad_count;
+    ble_pad = g_ble_pad;
+    g_ble_pad.latch = 0;
+    for (int i = 0; i < 4; i++) g_sys_pads[i].latch = 0;
+    memcpy(kb_keys, g_kb_mac_keys, sizeof kb_keys);
+    kb_mods = g_kb_modifiers;
+    pthread_mutex_unlock(&g_player_mu);
+
+    uint32_t vpad_btns = 0;
+    int32_t vpad_axes[4] = {0};
+    s2a_vpad_read_slot_state(&vpad_btns, vpad_axes);
+
+    BOOL used_sys[4] = {0};
+    BOOL used_ble = NO;
+    BOOL used_vpad = NO;
+    BOOL used_kb = NO;
+
+    BOOL has_any_phys = (sys_count > 0) || ble_pad.connected;
+    BOOL players_present = cfg && cfg->players_present;
+
+    for (uint32_t s = 0; s < S2A_PLAYER_INPUT_COUNT; s++) {
+        int backend = 2; // disabled
+        const char *dev_id = "";
+        if (!players_present) {
+            backend = (s == 0) ? 3 : 2;
+        } else {
+            backend = cfg->players[s].backend;
+            dev_id = cfg->players[s].device;
+        }
+        if (backend == 2) continue;
+
+        uint32_t btns = 0;
+        int32_t axes[4] = {0};
+        BOOL connected = NO;
+
+        if (backend == 4) { // touch (虚拟手柄)
+            if (!used_vpad) {
+                used_vpad = YES;
+                connected = YES;
+                btns = vpad_btns;
+                memcpy(axes, vpad_axes, sizeof axes);
+            }
+        } else if (backend == 5) { // keyboard (键盘)
+            if (!used_kb) {
+                used_kb = YES;
+                connected = YES;
+                s2a_ios_input_map_keyboard(kb_keys, kb_mods, &btns, axes);
+            }
+        } else if (backend == 1) { // nspro-hid (Switch 2 Pro BLE)
+            if (!used_ble && ble_pad.connected) {
+                used_ble = YES;
+                connected = YES;
+                uint32_t raw = (ble_pad.buttons | ble_pad.latch) & 0xffffu;
+                s2a_ios_input_map_physical(raw, ble_pad.axes, &btns, axes);
+            }
+        } else if (backend == 0 || backend == 3) { // system or auto
+            int pick_sys = -1;
+            if (dev_id && dev_id[0]) {
+                for (int i = 0; i < sys_count; i++) {
+                    if (!used_sys[i] && sys_pads[i].connected && !strcmp(sys_pads[i].vendor, dev_id)) {
+                        pick_sys = i; break;
+                    }
+                }
+            }
+            if (pick_sys < 0) {
+                for (int i = 0; i < sys_count; i++) {
+                    if (!used_sys[i] && sys_pads[i].connected) {
+                        pick_sys = i; break;
+                    }
+                }
+            }
+            if (pick_sys >= 0) {
+                used_sys[pick_sys] = YES;
+                connected = YES;
+                uint32_t raw = (sys_pads[pick_sys].buttons | sys_pads[pick_sys].latch) & 0xffffu;
+                s2a_ios_input_map_physical(raw, sys_pads[pick_sys].axes, &btns, axes);
+            } else if (backend == 3 && !used_ble && ble_pad.connected) {
+                used_ble = YES;
+                connected = YES;
+                uint32_t raw = (ble_pad.buttons | ble_pad.latch) & 0xffffu;
+                s2a_ios_input_map_physical(raw, ble_pad.axes, &btns, axes);
+            } else if (s == 0 && !has_any_phys && !used_vpad) {
+                // 1P 设为自动匹配但当前没有任何实体手柄时，自动回退到虚拟手柄以保证单人触屏可用
+                BOOL another_slot_claims_vpad = NO;
+                if (players_present) {
+                    for (uint32_t k = 1; k < S2A_PLAYER_INPUT_COUNT; k++) {
+                        if (cfg->players[k].backend == 4) { another_slot_claims_vpad = YES; break; }
+                    }
+                }
+                if (!another_slot_claims_vpad) {
+                    used_vpad = YES;
+                    connected = YES;
+                    btns = vpad_btns;
+                    memcpy(axes, vpad_axes, sizeof axes);
+                }
+            }
+        }
+
+        if (connected) {
+            out->connected_mask |= (1u << s);
+            if (out->active) {
+                out->slots[s].buttons = btns & 0xffffu;
+                out->slots[s].lx = axes[0];
+                out->slots[s].ly = axes[1];
+                out->slots[s].rx = axes[2];
+                out->slots[s].ry = axes[3];
+            }
+        }
+    }
+    return 1;
 }

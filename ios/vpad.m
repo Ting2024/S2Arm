@@ -42,9 +42,11 @@ void s2a_fi_set_live(int on) __attribute__((weak_import));
 // 弱链接[lab]：S2A_AudioSetVolume（游戏音量当场生效，#1186 开发乙线宿主接线：AppleHardwareDeviceDriver.Volume 逐样本乘；取不到就只记偏好、下次起局生效 S2A_AUDIO_VOLUME）
 void S2A_AudioSetVolume(int percent) __attribute__((weak_import));
 #import "app_settings.h"   // 齿轮菜单：存档管理 / 更多设置（s2a_settings_runtime / s2a_settings_present）
+#import "input_settings.h"
 #import "play_layout.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
 #include "s2a_pad.h"
+#include "input_config.h"
 #include "s2a_direct_prompt.h"   // 触屏提示的文案（与 launchers/shared/experience.v1.json prompts 逐字一致）
 #include <stdatomic.h>
 #include <dlfcn.h>
@@ -53,6 +55,7 @@ void S2A_AudioSetVolume(int percent) __attribute__((weak_import));
 #include <pthread.h>
 #include <sys/stat.h>
 #include "native.h"
+#include "../runtime/src/dev_facilities.h"
 #include "s2a_unattended.h"
 uint64_t s2a_ap_frames(void);                                   // ap_host.c：上屏帧数
 int s2a_autoplay_on(void) __attribute__((weak_import));         // tests/autoplay：自动玩家在跑时不录
@@ -172,6 +175,34 @@ static float g_res_scale(void) {
 // 屏幕上打一行触屏真值（四指菜单里开关，缺省关）：手指点 → 触点 → 画面矩形 → 出图尺寸，一张截图就能定案。
 static int g_hud_on;
 static NSString *const kHudKey = @"S2A.touchHud";
+static pthread_mutex_t g_vpad_slot_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t g_vpad_slot_buttons, g_vpad_slot_latch;
+static int32_t g_vpad_slot_axes[4];
+static void vpad_slot_update(int connected, uint32_t buttons, const int32_t axes[4]) {
+    pthread_mutex_lock(&g_vpad_slot_mu);
+    if (!connected) {
+        g_vpad_slot_buttons = 0;
+        g_vpad_slot_latch = 0;
+        memset(g_vpad_slot_axes, 0, sizeof g_vpad_slot_axes);
+    } else {
+        buttons &= 0xffffu;
+        g_vpad_slot_latch |= buttons & ~g_vpad_slot_buttons;
+        g_vpad_slot_buttons = buttons;
+        if (axes) memcpy(g_vpad_slot_axes, axes, sizeof g_vpad_slot_axes);
+        else memset(g_vpad_slot_axes, 0, sizeof g_vpad_slot_axes);
+    }
+    pthread_mutex_unlock(&g_vpad_slot_mu);
+}
+void s2a_vpad_read_slot_state(uint32_t *out_buttons, int32_t out_axes[4]) {
+    pthread_mutex_lock(&g_vpad_slot_mu);
+    uint32_t b = g_vpad_slot_buttons | g_vpad_slot_latch;
+    g_vpad_slot_latch = 0;
+    int32_t ax[4];
+    memcpy(ax, g_vpad_slot_axes, sizeof ax);
+    pthread_mutex_unlock(&g_vpad_slot_mu);
+    if (out_buttons) *out_buttons = b;
+    if (out_axes) memcpy(out_axes, ax, sizeof ax);
+}
 
 static void note_read(s2a_pad_source source, uint32_t b, const int32_t *sticks) {
     uint64_t s = 0; for (int i = 0; i < 4; i++) s |= (uint64_t)(uint16_t)sticks[i] << (16 * i);
@@ -180,12 +211,13 @@ static void note_read(s2a_pad_source source, uint32_t b, const int32_t *sticks) 
 }
 // C# InputPump 查这个导出接到 InputHook：返回按键位，sticks[4] = 左 x / y、右 x / y（±32767，上为正）
 __attribute__((visibility("default"), used)) uint32_t s2a_vpad_read(int32_t *sticks) {
-    s2a_pad_source source; uint32_t b = s2a_pad_read(sticks, &source);
-    note_read(source, b, sticks);
-    return b;
+    s2a_pad_snapshot snapshot; s2a_ios_input_read(&snapshot);
+    memcpy(sticks, snapshot.axes, sizeof snapshot.axes);
+    note_read((s2a_pad_source)snapshot.source, snapshot.buttons, sticks);
+    return snapshot.buttons;
 }
 __attribute__((visibility("default"), used)) void s2a_vpad_read_ex(s2a_pad_snapshot *out) {
-    s2a_pad_read_ex(out);
+    s2a_ios_input_read(out);
     note_read((s2a_pad_source)out->source, out->buttons, out->axes);
 }
 
@@ -576,6 +608,7 @@ static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_
     for (S2AVPadLayout *l in st.layouts) if (![S2AVPadLayout isBuiltinIdentifier:l.identifier]) addLayout(l.identifier, l.displayName, nil);
     [lay addObject:vp_inline(@[vp_act(S2AL(@"vpad.menu.manageLayouts"), @"folder", NO, ^{ [ws afterMenu:^{ [ws openLayouts]; }]; })])];
     [items addObject:vp_sub(S2AL(@"vpad.layout.buttons"), @"square.grid.2x2", lay)];
+    [items addObject:vp_act(S2AL(@"vpad.menu.pad14"), @"gamecontroller.fill", NO, ^{ [ws afterMenu:^{ [ws openInputSettings]; }]; })];
     // 摇杆
     UIAction *fixed = [self live:@"vp.stick.fixed" title:S2AL(@"vpad.stick.fixed") note:S2AL(@"vpad.menu.stickFixed.note") on:^BOOL{ return st.stickFixed; } disabled:nil run:^{ NSError *e;
         if (![st setStickFixed:!st.stickFixed sensitivity:st.stickSensitivity error:&e]) [ws menuError:S2AL(@"vpad.error.stickNotSaved") error:e]; else [ws stickModeChanged]; }];
@@ -621,6 +654,7 @@ static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_
     // 手柄与体感（controller.m / phone_motion.m 监听偏好变化，改完即生效）
     VPFlag gyro = ^BOOL{ id o = [d objectForKey:@"S2APhoneGyro"]; return o ? [o boolValue] : YES; };
     [items addObject:vp_sub(S2AL(@"vpad.menu.pad"), @"scope", @[
+        vp_act(S2AL(@"vpad.menu.pad14"), @"gamecontroller.fill", NO, ^{ [ws afterMenu:^{ [ws openInputSettings]; }]; }),
         [self live:@"vp.pad.ns2pro" title:S2AL(@"vpad.menu.ns2pro") note:nil on:^BOOL{ return [d boolForKey:@"S2ANS2ProAdapterEnabled"]; } disabled:nil
                run:^{ [d setBool:![d boolForKey:@"S2ANS2ProAdapterEnabled"] forKey:@"S2ANS2ProAdapterEnabled"]; }],
         // 说明一句第三方手柄（八位堂、盖世小鸡等 Xbox 外形）切到 Switch 模式才有体感（11-16，手柄左右马达 + 第三方体感同版）
@@ -744,7 +778,8 @@ static void snap_restart_result(int result, const char *detail, void *context) {
     // Disconnect clears pad.c's short-press latch as well as held state. Merely
     // publishing zero buttons leaves a press queued for the next HID read.
     s2a_pad_update(S2A_PAD_TOUCH, 0, 0, NULL);
-    if (_inputEnabled && !_settingsOpen && !_editing && !atomic_load(&_screenLocked)) s2a_pad_update(S2A_PAD_TOUCH, 1, 0, axes);
+    vpad_slot_update(0, 0, NULL);
+    if (_inputEnabled && !_settingsOpen && !_editing && !atomic_load(&_screenLocked)) { s2a_pad_update(S2A_PAD_TOUCH, 1, 0, axes); vpad_slot_update(1, 0, axes); }
 }
 - (CGPoint)fixedCenter:(int)side {
     CGPoint c = [_layoutStore stickCenter:side]; return CGPointMake(CGRectGetMinX(_safeRect) + c.x * _safeRect.size.width, CGRectGetMinY(_safeRect) + c.y * _safeRect.size.height);
@@ -883,6 +918,7 @@ static NSString *const kSlideSwitchKey = @"S2AVPadSlideSwitch";   // 滑动切�
     if (_editing || _touchOnly || _settingsOpen) return;
     _editing = YES; _panelHidden = NO; [self clearTouches]; [_fade invalidate]; _fade = nil;
     s2a_pad_update(S2A_PAD_TOUCH, 0, 0, NULL);   // 编辑期间触屏源不可用：游戏收不到半截按键
+    vpad_slot_update(0, 0, NULL);
     _drag = [NSMapTable strongToStrongObjectsMapTable]; _dragOffset = [NSMapTable strongToStrongObjectsMapTable];
     [self refreshScales];
     for (UILabel *l in _keys) { [l.layer removeAllAnimations]; l.hidden = NO; l.alpha = [self styleOf:l].hidden ? 0.35 : 1; l.layer.borderColor = vp_face().CGColor; }
@@ -1097,6 +1133,20 @@ static NSString *const kSlideSwitchKey = @"S2AVPadSlideSwitch";   // 滑动切�
     navigation.modalInPresentation = YES;
     [controller presentViewController:navigation animated:YES completion:nil];
 }
+- (void)openInputSettings {
+    UIViewController *controller = self.window.rootViewController;
+    if (!controller || _settingsOpen) return;
+    controller = s2a_top_presenter(controller);
+    UIViewController *page = s2a_ios_input_settings_controller();
+    if (!page) return;
+    _settingsOpen = YES; [self clearTouches];
+    __weak S2AVPadView *weakSelf = self;
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:page];
+    navigation.modalInPresentation = YES;
+    page.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone primaryAction:
+        [UIAction actionWithTitle:@"" image:nil identifier:nil handler:^(__unused UIAction *x) { [navigation dismissViewControllerAnimated:YES completion:^{ [weakSelf setSettingsOpen:NO]; }]; }]];
+    [controller presentViewController:navigation animated:YES completion:nil];
+}
 - (void)setSettingsOpen:(BOOL)open {
     _settingsOpen = open; [self clearTouches]; if (!open) [self wake];
 }
@@ -1160,6 +1210,15 @@ static NSString *const kSlideSwitchKey = @"S2AVPadSlideSwitch";   // 滑动切�
         return [store selectedLayout:nil] ?: ([store.selectedIdentifier isEqualToString:S2AVPadLayout2DIdentifier] ? [S2AVPadLayout twoDForSafeRect:safe] : [S2AVPadLayout defaultForSafeRect:safe split:split]);
     };
     return settings;
+}
+- (void)startEditingFromSettings {
+    if (_touchOnly) {
+        [_layoutStore setTouchOnly:NO error:nil];
+        _autoTouch = 0;
+        [self reloadLayout];
+    }
+    _settingsOpen = NO;
+    [self beginEditing];
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
@@ -1237,6 +1296,7 @@ static NSString *const kSlideSwitchKey = @"S2AVPadSlideSwitch";   // 滑动切�
     uint32_t b = _stickPress | held | _holdLock.locked;
     int32_t axes[4]; for (int i = 0; i < 4; i++) axes[i] = _ax[i];
     s2a_pad_update(S2A_PAD_TOUCH, 1, b, axes);
+    vpad_slot_update(1, b, axes);
     for (UILabel *l in _keys) { vp_fill(l, b >> l.tag & 1); vp_lock(l, _layoutStore.holdLockEnabled, _holdLock.locked >> l.tag & 1); }
     // pad_update 已释放输入锁；UIKit 反馈只在主线程触屏事件上运行，不进入 HID / 游戏震动链。
     uint8_t active = (_stick[0] ? 1 : 0) | (_stick[1] ? 2 : 0);
@@ -1542,3 +1602,4 @@ void s2a_vpad_set_touch_hud(BOOL enabled) {
 BOOL s2a_vpad_has_layouts(void) { return g_vpad.window != nil; }
 NSString *s2a_vpad_layout_name(void) { return [g_vpad layoutName] ?: S2AL(@"vpad.layout.notLoaded"); }
 UIViewController *s2a_vpad_layout_controller(void) { return g_vpad.window ? [g_vpad layoutController] : nil; }
+void s2a_vpad_begin_editing(void) { [g_vpad startEditingFromSettings]; }

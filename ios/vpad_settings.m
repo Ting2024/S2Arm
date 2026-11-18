@@ -1,4 +1,5 @@
 #import "vpad_settings.h"
+#import "vpad.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "s2a_l10n.h"
 #include <math.h>

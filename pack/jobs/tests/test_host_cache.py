@@ -60,6 +60,8 @@ class HostCacheTests(unittest.TestCase):
         info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
         self.assertEqual(info["LSMinimumSystemVersion"], "15.0")
         self.assertEqual(info["CFBundleExecutable"], "s2arm-host")
+        self.assertTrue(info.get("NSLocalNetworkUsageDescription"))
+        self.assertEqual(info.get("NSBonjourServices"), ["_s2arm-ldn._tcp"])
 
     def test_complete_signed_cache_hits(self):
         self.assertTrue(build.host_cache_ok(self.app, self.stamp))

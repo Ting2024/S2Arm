@@ -20,6 +20,7 @@
 #include "s2a_pad.h"
 #include "s2a_programs.h"
 #include "s2a_launch_ctx.h"
+#include "s2a_import_paths.h"
 #include "../../graphics/nvn/gfx/nvn/dmsh_chain.h"   // DMSH_CHAIN：直连安全网诊断信息里写翻译链
 #include <unistd.h>
 #include <sys/stat.h>
@@ -119,6 +120,7 @@ static int discover_modules(const char *dir, const char **names) {
 
 // 多程序合集（s2a_programs.h）：游戏 ExecuteProgram(n) 登记了下一局的序号 → 本局装该序号的模块目录（programs/<n>/，序号 0 = 根），模块名按目录重新列
 static int g_program_switched = -1;   // 本局刚切到的序号（load_session_modules 装完模块后让图形层换库用）；没切 = -1
+static int g_game_switched;           // 多款容器跨款切换到另一款游戏
 static void switch_program_modules(void) {
     char dir[1100]; int p = s2a_programs_take(dir, sizeof dir);
     if (p < 0) return;
@@ -144,7 +146,13 @@ static void load_session_modules(void *unused) {
     { int s2a_guest_file_retry(void); s2a_guest_file_retry(); }   // 起局时空间不够没接上文件后备的，解包完、装模块前再试一次（vawin.c，#483）
 #endif
     load_modules(g_module_dir, (const char **)g_module_names, g_module_count);
-    if (g_program_switched >= 0) {   // 多程序合集：模块（含 main.npdm 程序号）换好后，直连图形层的着色器库 / 映射表 / 每款参数换到该序号（graphics/nvn/host_adapt.m）；
+    if (g_game_switched) {
+        void s2a_npdm_program_id_reload(void); s2a_npdm_program_id_reload();
+        int (*swg)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_direct_game_switch");
+        if (swg) swg(); else LOG("【红】跨款切换：宿主没有直连图形层的切换入口 s2a_direct_game_switch");
+        g_game_switched = 0;
+        g_program_switched = -1;
+    } else if (g_program_switched >= 0) {   // 多程序合集：模块（含 main.npdm 程序号）换好后，直连图形层的着色器库 / 映射表 / 每款参数换到该序号（graphics/nvn/host_adapt.m）；
         //   没链直连图形层的宿主（安卓、图形单测）按名找不到 = 报红，不假装换了
         void s2a_npdm_program_id_reload(void); s2a_npdm_program_id_reload();   // gfxmode.c：程序号按这一支的 main.npdm（load_modules 之后 s2a_module_dir 才是这一支的目录）
         int (*sw)(int) = (int (*)(int))dlsym(RTLD_DEFAULT, "s2a_direct_program_switch");
@@ -240,6 +248,50 @@ int s2a_host_rebuild(void) {
     return start_guest_thread();
 }
 
+#if TARGET_OS_IPHONE
+// 多款容器跨款启动：上一局经 s2a_host_stop 退休后返回游戏库，玩家选择新游戏时在后台线程中配置新模块目录并调用 s2a_host_rebuild。
+int s2a_host_start_selected_game(void) {
+    const s2a_launch_ctx *lc = s2a_launch_ctx_get();
+    if (!lc) { LOG("【红】跨款启动：启动上下文不可用"); return -1; }
+    { const char *gd = s2a_launch_ctx_game_env_dir(s2a_envfile_process_docs()); if (gd) s2a_envfile_apply(gd); }
+    s2a_envfile_log_flush();
+    { void s2a_ql_boot(void); s2a_ql_boot(); }
+    { int s2a_import_gate(void); if (s2a_import_gate()) LOG("跨款启动：资源导入闸门已完成"); }
+    { void s2a_gfx_mode_data_ready(void); s2a_gfx_mode_data_ready(); }
+    const char *dir = lc->module_dir;
+    const char *names[12];
+    int n = discover_modules(dir, names);
+    if (!n) { LOG("【红】跨款启动：模块目录 %s 没有模块", dir); return -1; }
+    char *nd = strdup(dir); char **nn = calloc((size_t)n, sizeof *nn);
+    if (!nd || !nn) { free(nd); free(nn); return -1; }
+    for (int m = 0; m < n; m++) if (!(nn[m] = strdup(names[m]))) {
+        for (int k = 0; k < m; k++) free(nn[k]);
+        free(nn); free(nd); return -1;
+    }
+    for (int m = 0; m < g_module_count; m++) free(g_module_names[m]);
+    free(g_module_names); free(g_module_dir);
+    g_module_dir = nd; g_module_names = nn; g_module_count = n;
+    { void s2a_module_dir_set(const char *), s2a_npdm_program_id_reload(void); s2a_module_dir_set(dir); s2a_npdm_program_id_reload(); }
+    void s2a_loader_image_program(int); s2a_loader_image_program(0);
+    s2a_programs_init(dir);
+    g_game_switched = 1;
+    LOG("跨款启动：切换游戏 %s，模块目录 %s（%d 个模块）", lc->game_id, dir, n);
+    if (s2a_host_rebuild()) {
+        s2a_session_service_failed(s2a_session_generation());
+        LOG("【红】跨款启动失败：%s", lc->game_id);
+        return -1;
+    }
+    unsigned gen = s2a_session_generation();
+    if (s2a_session_running(gen)) {
+        s2a_session_service_failed(gen);
+        LOG("【红】跨款启动状态切换失败：%s", lc->game_id);
+        return -1;
+    }
+    LOG("跨款启动完成：游戏 %s 会话 %u 已运行", lc->game_id, gen);
+    return 0;
+}
+#endif
+
 int s2a_pack_apply(const char *docs);
 #if TARGET_OS_IPHONE
 // 解包专用局（S2A_PACK_APPLY_ONLY）做完正常收尾：打「优雅退出完成」并冲刷日志再 _exit。原先直接 _exit，这一局日志没有收尾行、也没有心跳，
@@ -295,7 +347,8 @@ static int host_run(int argc, char **argv) {
     // 测试层契约：S2A_PACK_APPLY_ONLY=1 只解开推送来的资源包就退出（Documents = $HOME/Documents，Mac 上可用 S2A_DOCS 指）
     s2a_boot_mark("进入 main");
     { const char *e = getenv("S2A_PACK_APPLY_ONLY");
-      if (e && *e == '1') { char docs[1024]; strlcpy(docs, lc->docs, sizeof docs);   // 启动上下文文档根（兼容 = S2A_DOCS，否则 $HOME/Documents）
+      if (e && *e == '1') { char docs[1024];
+          if (s2a_import_apply_docs(lc, docs, sizeof docs) != 1) die("解包资源根无效：拒绝使用用户文档目录代替");
 #if TARGET_OS_IPHONE
           static char sdocs[1024]; strlcpy(sdocs, docs, sizeof sdocs); pthread_t th;
           if (pthread_create(&th, NULL, pack_apply_thread, sdocs)) die("解包线程起不来");

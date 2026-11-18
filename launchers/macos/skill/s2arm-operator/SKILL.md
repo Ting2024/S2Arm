@@ -100,6 +100,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 | 现象 / 错误码 | 谁 | 怎么办 |
 |---|---|---|
 | `keys_missing` / `keys_invalid` | ask | 问玩家自己的 prod.keys 在哪，`keys <路径>`；文件不完整就请他换一份完整的 |
+| `hash_mismatch` 哈希校验失败 | human | 保留日志排查读取器兼容性及校验策略差异；其他模拟器能运行时尤其不能据此认定文件损坏或密钥过旧 |
 | `content_unreadable` 无法读取 | human | 核对源文件和票据是否完整 |
 | `ticket_missing` 缺少票据 | human | 核对源文件是否含有所需票据 |
 | `content_truncated` 文件不完整 | human | 从原始位置重新复制完整的游戏文件 |

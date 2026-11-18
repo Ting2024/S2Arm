@@ -110,14 +110,53 @@ def safe_path(root, path):
     return contained(root, path)
 
 
+def user_binding(c, game):
+    """Stable target identity, independent of nickname and registry revision.
+
+    Include the canonical root and library/game IDs even when two users' save
+    bytes happen to match. This is a stale-target check, not authentication.
+    """
+    from users import selected, paths
+    user = selected(c)
+    value = dict(schema=1, userId=user['id'], accountUid=user['accountUid'],
+                 libraryId=c.r['libraryId'], gameId=game['id'],
+                 stateRoot=str(paths(c, game['id'])['save']))
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def check_preview_user(c, game):
+    from users import selected
+    supplied = c.r.get('previewUserBinding')
+    if supplied == user_binding(c, game):
+        return
+    # Old clients never selected launcher users. Preserve their implicit 01
+    # workflow only; explicit selection must carry the new preview contract.
+    if 'previewUserBinding' not in c.r and 'userId' not in c.r and selected(c)['id'] == '01':
+        return
+    fail(c, "备份或当前存档已变化，请重新检查备份后再确认恢复。", "changed")
+
+
+def _has_entries(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if not path.is_dir():
+        return path.exists()
+    return any(True for _ in path.iterdir())
+
+
 def locations(c, game):
     gid = game.get("id", "")
     if not re.fullmatch(r"[0-9a-fA-F]{16}", gid):
         fail(c, "游戏标识无效，无法管理存档。", "game_id")
     try:
-        root = safe_path(layout.root_of(c, gid), layout.path(c, gid, "saves", create=False))
-        transactions = safe_path(layout.root_of(c, gid), layout.root_of(c, gid) / "save-transactions")   # 事务只涉及本位置的游戏（游戏库结构 v3）
-        backups = safe_path(layout.root_of(c, gid), layout.path(c, gid, "save-backups", create=False))
+        from users import paths, selected
+        if selected(c)["id"] != "01" or _has_entries(c.library / "saves" / gid):
+            planned = paths(c, gid)
+            root, transactions, backups = (planned[key] for key in ("save", "transactions", "backups"))
+        else:
+            root = safe_path(layout.root_of(c, gid), layout.path(c, gid, "saves", create=False))
+            transactions = safe_path(layout.root_of(c, gid), layout.root_of(c, gid) / "save-transactions")   # 事务只涉及本位置的游戏（游戏库结构 v3）
+            backups = safe_path(layout.root_of(c, gid), layout.path(c, gid, "save-backups", create=False))
     except ValueError:
         fail(c, "存档目录包含链接，已停止操作。", "unsafe_path")
     return root, transactions, backups
@@ -600,18 +639,32 @@ def validate_archive(c, z):
 def journal_paths(c, game, record):
     root, transactions, backups = locations(c, game)
     token = record.get("transaction", "")
+    schema = record.get('schema')
     if (
-        record.get("schema") != 1
+        type(schema) is not int or schema not in (1, 2)
         or record.get("gameId") != game["id"]
         or not re.fullmatch(r"[0-9a-f]{32}", token)
         or type(record.get("hadOriginal")) is not bool
         or record.get("phase") not in ("prepared", "committed")
     ):
         raise ValueError("invalid recovery record")
-    transaction = safe_path(layout.root_of(c, game["id"]), transactions / token)
-    previous = safe_path(layout.root_of(c, game["id"]), backups / token)
-    owner = safe_path(layout.root_of(c, game["id"]), transaction / "owner.json")
-    if json_object(owner.read_bytes()) != dict(schema=1, gameId=game["id"], transaction=token):
+    from users import selected
+    expected = dict(schema=schema, gameId=game["id"], transaction=token)
+    if schema == 1:
+        # Legacy journals have no launcher identity, so only the original root
+        # of user 01 can recover them. Never infer another owner from payloads.
+        if selected(c)["id"] != "01":
+            raise ValueError("legacy transaction cannot belong to another user")
+    else:
+        binding = user_binding(c, game)
+        if record.get("userBinding") != binding:
+            raise ValueError("transaction user mismatch")
+        expected["userBinding"] = binding
+    base_root = c.library if selected(c)["id"] != "01" else layout.root_of(c, game["id"])
+    transaction = safe_path(base_root, transactions / token)
+    previous = safe_path(base_root, backups / token)
+    owner = safe_path(base_root, transaction / "owner.json")
+    if json_object(owner.read_bytes()) != expected:
         raise ValueError("transaction owner mismatch")
     return root, transaction, previous
 
@@ -635,10 +688,13 @@ def recovery_message(error):
 
 
 def recover_once(c, game):
-    """Caller MUST hold the library execution lock, including build.launch.
+    """Caller MUST hold execution/game readers and exclusive game+user session.
+    Legacy callers with exclusive library execution are also safe.
     返回 True = 回退了一次没做完的事务；False = 没有事务或已提交；失败抛 RecoveryFailed（不删记录）。"""
+    from users import selected
     root, transactions, _ = locations(c, game)
-    journal = safe_path(layout.root_of(c, game["id"]), transactions / (game["id"] + ".json"))
+    base_root = c.library if selected(c)["id"] != "01" else layout.root_of(c, game["id"])
+    journal = safe_path(base_root, transactions / (game["id"] + ".json"))
     if not journal.exists():
         return False
     seen = ""   # 认出的事务目录（失败时写进说明）
@@ -649,8 +705,8 @@ def recover_once(c, game):
         root, transaction, previous = journal_paths(c, game, record)
         seen = str(transaction)
         old, new = previous / "data", transaction / "new"
-        safe_path(layout.root_of(c, game["id"]), old)
-        safe_path(layout.root_of(c, game["id"]), new)
+        safe_path(base_root, old)
+        safe_path(base_root, new)
         if old.exists() and not old.is_dir():
             raise ValueError("invalid original save copy")
         if record["phase"] == "committed":
@@ -698,7 +754,8 @@ def recover(c, game, override=False):
 def stopped(c, tolerate=False):
     """tolerate = 只读或把存档拷出去的操作（检查 / 备份 / 校验备份）：回退失败也照做，第三项给出失败的事务记录路径；
     恢复存档不 tolerate（不在说不清的状态上再覆盖）。"""
-    with c.lock("execution"), c.lock():
+    from users import session_lock
+    with session_lock(c, c.game()["id"]), c.lock():
         game = c.game()
         recovered, failed = False, ""
         try:
@@ -811,13 +868,45 @@ def read_import_notice(path):
     return notice if isinstance(notice, str) else None
 
 
-def save_top(read, files, dirs, game):
+def import_target_user(read, c=None):
+    """Match the account the host will open, never an arbitrary save owner.
+
+    Explicit nonlegacy users carry a stable UID; require its existing profile
+    and save slot rather than borrowing last_opened. User 01 keeps the legacy
+    fallback when DefaultUserId is missing. No ownership/profile rewrites.
+    """
+    data = json_object(read(PROFILE))
+    names = profile_names(data)
+    if c is not None:
+        from users import selected
+        user = selected(c)
+        if user['id'] != '01':
+            uid = user['accountUid']
+            if uid not in names:
+                raise ValueError('所选用户尚未建立游戏账号，请先运行游戏并存档')
+            return uid
+    default = "00000000000000010000000000000000"
+    if default not in names:
+        return default
+    current = data.get("last_opened")
+    if not isinstance(current, str) or current.lower() not in names:
+        raise ValueError("当前游戏账号无效，无法确定存档导入目标")
+    return current.lower()
+
+
+def import_target_entries(read, files, dirs, game, kind=None, *, c=None):
+    current = import_target_user(read, c)
+    return [e for e in save_entries(read, files, dirs)
+            if e["programId"] == game["id"].lower()
+            and (kind is None or e["type"] == kind)
+            and (e["type"] == "device" or e["userId"] == current)]
+
+
+def save_top(read, files, dirs, game, *, c=None):
     """这款游戏自己写出的存档顶层（同程序号条目的槽 0 里第一层名字），给 save_formats 判唯一子目录 0/ 剥不剥。"""
     names = set()
     if SAVE_INDEX in files:
-        for e in save_entries(read, files, dirs):
-            if e["programId"] != game["id"].lower():
-                continue
+        for e in import_target_entries(read, files, dirs, game, c=c):
             pre = "bis/user/save/%s/0/" % e["saveId"]
             for name in (*files, *dirs):
                 if name.startswith(pre):
@@ -850,6 +939,31 @@ def requested_player(r):
     ):
         raise Failure("玩家设置无效。")
     return player
+
+
+def requested_local_players(r):
+    """请求里的 localPlayers 列表 [{user, name, folder}, …]；没带或格式不合规返回 None"""
+    raw = r.get("localPlayers")
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    if not isinstance(raw, list):
+        return None
+    result = []
+    for item in raw:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("name", ""), str)
+            and (item.get("user") == FIRST_PLAYER or re.fullmatch(r"(?!0{32})[0-9a-f]{32}", str(item.get("user", ""))))
+            and re.fullmatch(r"SaveData(-[^/\\:]{1,120})?", str(item.get("folder", "")))
+            and (item["user"] == FIRST_PLAYER) == (item["folder"] == "SaveData")
+        ):
+            result.append({"user": item["user"], "name": item.get("name", ""), "folder": item["folder"]})
+    return result or None
 
 
 def folder_user(folder, program):
@@ -891,7 +1005,7 @@ def import_notice(c, game, root, source):
             return (root / name).read_bytes()
 
         with save_formats.extracted(
-            source, tid=game["id"], ref=save_top(read, files, dirs, game)
+            source, tid=game["id"], ref=save_top(read, files, dirs, game, c=c)
         ) as hit:
             return STRUCTURE_NOTICE if save_formats.DOUBT in hit[4] else ""
     except (ValueError, OSError, zipfile.BadZipFile):
@@ -901,16 +1015,20 @@ def import_notice(c, game, root, source):
 def external_archive(c, game, root, source):
     """社区存档（JKSV / Checkpoint / yuzu / Ryujinx / 裸文件）→ 本游戏的 .s2asave。
 
-    只替换本游戏已有存档条目（同程序号、同类型）提交槽 0 / 1 里的文件，其余存档树、索引、用户资料原样；
+    只替换本游戏实际启动账号的已有存档条目（或设备存档）提交槽 0 / 1 里的文件，其余存档树、索引、用户资料原样；
     转换结果按「来源内容 + 当前存档指纹」缓存在 save-imports/<游戏>/，检查与恢复用同一份（原流程比对归档 sha）。
     返回 (归档, 提示)；提示是给玩家看的一句（目录结构存疑时为 STRUCTURE_NOTICE，否则空串），
     与归档同时写进缓存旁的小文件，缓存命中时不必重跑识别也能取回。
     """
     try:
+        from users import paths, selected
         player = requested_player(c.r)
         user = player_user(c, game, player) if player else ""   # 换个玩家导同一份来源 = 另一份转换结果
-        key = hashlib.sha256((source_digest(c, source) + fingerprint(c, root) + user).encode()).hexdigest()[:32]
-        cache = safe_path(_lay.root_of(c, game["id"]), _lay.root_of(c, game["id"]) / "save-imports" / game["id"])
+        key = hashlib.sha256(("launcher-account-v3:" + user_binding(c, game) + source_digest(c, source) + fingerprint(c, root) + user).encode()).hexdigest()[:32]
+        if selected(c)["id"] != "01":
+            cache = paths(c, game["id"])["imports"]
+        else:
+            cache = safe_path(_lay.root_of(c, game["id"]), _lay.root_of(c, game["id"]) / "save-imports" / game["id"])
     except ValueError:
         fail(c, "存档目录包含链接，已停止操作。", "unsafe_path")
     destination = cache / (key + ".s2asave")
@@ -932,7 +1050,7 @@ def external_archive(c, game, root, source):
 
         # 这款游戏自己写出的存档顶层（槽 0）：社区存档唯一子目录「0」是提交目录还是游戏的槽位，靠它判（10-27 一款第一方动作冒险游戏 0/…5/）
         with save_formats.extracted(
-            source, tid=game["id"], ref=save_top(read, files, dirs, game)
+            source, tid=game["id"], ref=save_top(read, files, dirs, game, c=c)
         ) as (layout, data, program, kind, why):
             if program != game["id"].lower():
                 fail(c, "这份存档属于另一款游戏（程序号 %s），已拒绝导入。" % program, "wrong_game")
@@ -942,18 +1060,23 @@ def external_archive(c, game, root, source):
                 notice = STRUCTURE_NOTICE
             if SAVE_INDEX not in files:
                 fail(c, "这款游戏还没有存档位置。请先运行一次游戏并存档，再导入。", "no_target")
-            entries = [
-                e
-                for e in save_entries(read, files, dirs)
-                if e["programId"] == game["id"].lower() and (kind is None or e["type"] == kind)
-            ]
-            if user:   # 本地玩家：账号存档只认这个玩家的；这款有别人的账号存档、没有他的 = 他还没玩过，不往别人或设备存档里放
-                others = [e for e in entries if e["type"] == "account" and e["userId"] != user]
-                entries = [e for e in entries if e not in others]
-                if others and kind != "device" and not any(e["type"] == "account" for e in entries):
-                    fail(c, "这位玩家还没有这款游戏的存档。请先选这位玩家运行一次游戏并存档，再导入。", "no_target")
-            if kind is None and len(entries) > 1:   # 同时有账户存档和设备存档的游戏：没说明类型的来源按账户存档
-                entries = [e for e in entries if e["type"] == "account"] or entries
+            if "player" in c.r:
+                entries = [
+                    e
+                    for e in save_entries(read, files, dirs)
+                    if e["programId"] == game["id"].lower() and (kind is None or e["type"] == kind)
+                ]
+                if user:   # 本地玩家：账号存档只认这个玩家的；这款有别人的账号存档、没有他的 = 他还没玩过，不往别人或设备存档里放
+                    others = [e for e in entries if e["type"] == "account" and e["userId"] != user]
+                    entries = [e for e in entries if e not in others]
+                    if others and kind != "device" and not any(e["type"] == "account" for e in entries):
+                        fail(c, "这位玩家还没有这款游戏的存档。请先选这位玩家运行一次游戏并存档，再导入。", "no_target")
+                if kind is None and len(entries) > 1:   # 同时有账户存档和设备存档的游戏：没说明类型的来源按账户存档
+                    entries = [e for e in entries if e["type"] == "account"] or entries
+            else:
+                entries = import_target_entries(read, files, dirs, game, kind, c=c)
+                if kind is None and len(entries) > 1:
+                    entries = [e for e in entries if e["type"] == "account"] or entries
             if len(entries) != 1:
                 fail(
                     c,
@@ -1014,7 +1137,7 @@ def checked_archive(c, game, root):
         if source.stat().st_size > MAX_BYTES + (64 << 20) or root in resolve_path(source).parents:
             raise ValueError("invalid backup location or size")
         before = hash_file(c, source)
-        with open_archive(c, source) as (_, manifest):
+        with open_archive(c, source) as (archive, manifest):
             wanted = identity(game)
             if manifest["game"]["id"] != wanted["id"]:
                 fail(c, "备份属于另一款游戏，已拒绝恢复。", "wrong_game")
@@ -1025,6 +1148,18 @@ def checked_archive(c, game, root):
                 if c.r.get("sync"):
                     fail(c, "备份与当前游戏版本或更新、DLC 组合不符，已拒绝恢复。", "version")
                 mismatch.append((VERSION_NOTICE, "version"))
+            from users import selected
+            user = selected(c)
+            if user['id'] != '01':
+                uid = user['accountUid']
+                owners = {entry['userId'] for entry in manifest['saveEntries']
+                          if entry['programId'] == game['id'].lower() and entry['type'] == 'account'}
+                profiles = profile_names(json_object(archive.read('payload/' + PROFILE)))
+                # An empty destination is not permission to import another UID.
+                # Exact-owner full backups only; community conversion uses the
+                # selected user's existing slot and never rewrites ownership.
+                if (owners and owners != {uid}) or uid not in profiles:
+                    fail(c, "备份用户与当前存档用户不符，已拒绝恢复。", "wrong_user")
             if root.exists():
                 files, dirs = scan(c, root)
                 if any(n.startswith("bis/user/save/") for n in files):
@@ -1034,8 +1169,9 @@ def checked_archive(c, game, root):
                         save_entries(lambda name: (root / name).read_bytes(), files, dirs)
                     )
                     incoming = ownership(manifest["saveEntries"])
-                    # 本地玩家（#623）：账号集合是包含关系（一边多了 / 少了玩家）照常恢复，各有对方没有的才拒绝（同 SaveTransferArchive.cs Identity）
-                    if any(not (target[key] <= incoming[key] or incoming[key] <= target[key])
+                    # 本地玩家（#623）：账号集合是包含关系（一边多了 / 少了玩家）或整包共享首个玩家时照常恢复（同 SaveTransferArchive.cs Identity）
+                    if any(not (target[key] <= incoming[key] or incoming[key] <= target[key]
+                                or (user['id'] == '01' and bool(target[key] & incoming[key])))
                            for key in target.keys() & incoming.keys()):
                         if c.r.get("sync"):
                             fail(c, "备份用户与当前存档用户不符，已拒绝恢复。", "wrong_user")
@@ -1174,6 +1310,7 @@ def inspect(c):
             archiveSha256=sha,
             targetFingerprint=fingerprint(c, root),
             previewLibraryId=c.r["libraryId"],
+            previewUserBinding=user_binding(c, game),
             fileCount=len(manifest["files"]),
             totalBytes=sum(v["size"] for v in manifest["files"]),
             # 目录结构存疑时给玩家的一句话（空的就正常）；恢复不因它拒绝，界面只在确认前提示
@@ -1198,6 +1335,8 @@ def copy_tree(c, source, destination):
 
 def restore(c):
     c.begin("验证恢复条件", 1, 3)
+    # Reject a stale selection even before recovery/conversion can write data.
+    check_preview_user(c, c.game())
     with stopped(c) as (game, _, _):
         root, transactions, backups = locations(c, game)
         seed = seed_source(c, game, root)
@@ -1209,6 +1348,8 @@ def restore(c):
         #   刚存的进度就在副本里；提示一句照常恢复。换了游戏库照旧拒绝。云存档自动同步（sync）照旧拒绝
         if c.r.get("previewLibraryId") != c.r["libraryId"]:
             fail(c, "备份或当前存档已变化，请重新检查备份后再确认恢复。", "changed")
+        from users import selected
+        base_root = c.library if selected(c)["id"] != "01" else layout.root_of(c, game["id"])
         if c.r.get("archiveSha256") != sha or c.r.get("targetFingerprint") != target_hash:
             if c.r.get("sync"):
                 fail(c, "备份或当前存档已变化，请重新检查备份后再确认恢复。", "changed")
@@ -1216,12 +1357,13 @@ def restore(c):
         token = uuid.uuid4().hex
         transactions.mkdir(parents=True, exist_ok=True)
         transaction = transactions / token
-        transaction.mkdir()
-        atomic(transaction / "owner.json", dict(schema=1, gameId=game["id"], transaction=token))
+        transaction.mkdir(mode=0o700)
+        binding = user_binding(c, game)
+        atomic(transaction / "owner.json", dict(schema=2, gameId=game["id"], transaction=token, userBinding=binding))
         previous = backups / token
-        previous.mkdir(parents=True)
-        sync_parents(transaction, layout.root_of(c, game["id"]))
-        sync_parents(previous, layout.root_of(c, game["id"]))   # 备份目录在这款所在的存放位置下，不一定在默认游戏库里
+        previous.mkdir(parents=True, mode=0o700)
+        sync_parents(transaction, base_root)
+        sync_parents(previous, base_root)   # 备份目录在这款所在的存放位置下，不一定在默认游戏库里
         new, old = transaction / "new", previous / "data"
         journal = transactions / (game["id"] + ".json")
         had_original = root.exists()
@@ -1230,7 +1372,7 @@ def restore(c):
             total = sum(info[2] for info in scan(c, root)[0].values()) + sum(
                 f["size"] for f in manifest["files"]
             )
-            if shutil.disk_usage(layout.root_of(c, game["id"])).free < 2 * total + (64 << 20):   # 暂存与恢复前副本都在这款的存放位置上，查那块盘
+            if shutil.disk_usage(base_root).free < 2 * total + (64 << 20):   # 暂存与恢复前副本都在这款的存放位置上，查那块盘
                 fail(c, "游戏库磁盘空间不足，无法暂存并保留恢复前副本。", "space")
             if had_original and any(n.startswith("bis/user/save/") for n in scan(c, root)[0]):
                 c.begin("保留恢复前副本", 2, 3)
@@ -1282,7 +1424,8 @@ def restore(c):
             for parent, _dirs, _ in os.walk(new, topdown=False):
                 fsync_dir(parent)
             record = dict(
-                schema=1,
+                schema=2,
+                userBinding=binding,
                 gameId=game["id"],
                 transaction=token,
                 hadOriginal=had_original,
@@ -1291,7 +1434,7 @@ def restore(c):
             atomic(journal, record)
             fsync_dir(transactions)
             root.parent.mkdir(parents=True, exist_ok=True)
-            sync_parents(root.parent, layout.root_of(c, game["id"]))
+            sync_parents(root.parent, base_root)
             c.begin("提交存档恢复", 3, 3)
             if had_original:
                 os.rename(root, old)

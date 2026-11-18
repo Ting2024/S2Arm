@@ -175,12 +175,18 @@ public static partial class SaveTransfer
             string names = string.Join(", ", damaged.Take(5).Select(d => d.GetValue<string>())) + (damaged.Count > 5 ? " …" : "");
             warnings.Add(string.Format(T("备份里有 {0} 个文件校验对不上（{1}），这几个不恢复、保留当前存档里原来的，其余照常恢复。", "{0} files in the backup failed the integrity check ({1}). Those files are not restored and the current save’s originals are kept; everything else is restored."), damaged.Count, names));
         }
+        if (c.SelectedAccountUid != null)
+        {
+            var acctOwners = manifest["saveEntries"].AsArray().Where(e => Str(e, "type") == "account");
+            Require(acctOwners.All(e => Str(e, "userId") == c.SelectedAccountUid),
+                T("备份账号与所选用户不同；不会将其他账号的存档写入此用户。", "The backup account does not match the selected user; saves from another account will not be written to this user."), "save_wrong_user");
+        }
         var owners = OwnerSets(c, manifest);
         if (owners == null) return warnings;
         var (a, b) = owners.Value;
         // 本地玩家（#623）：一台设备上加了 / 删了玩家，两边的账号集合是包含关系（另一台设备还没建这个玩家、恢复建玩家之前的备份），照常恢复；
         //   两边各有对方没有的账号 = 不是同一套账号（原先要求完全相同，加了第二个玩家后 iCloud 另一端、旧备份都恢复不了）
-        if (a.Keys.Intersect(b.Keys).Any(group => !(a[group].IsSubsetOf(b[group]) || b[group].IsSubsetOf(a[group]))))
+        if (a.Keys.Intersect(b.Keys).Any(group => !(a[group].IsSubsetOf(b[group]) || b[group].IsSubsetOf(a[group]) || (c.SelectedAccountUid == null && a[group].Overlaps(b[group])))))
         {
             Require(!sync, T("备份与目标存档账号归属不同。", "The backup and the target save belong to different accounts."), "save_wrong_user");
             warnings.Add(T("备份与目标存档账号归属不同，仍可恢复；恢复后当前账号的进度会换成备份里的，恢复前的存档会自动保留一份副本。", "The backup and the target save belong to different accounts. You can still restore it; the current account’s progress will be replaced with the backup’s. The save from before the restore is kept automatically."));
@@ -225,7 +231,8 @@ public static partial class SaveTransfer
         using var archive = new Archive(Source(c));
         var warnings = Identity(c, archive.Manifest);
         return new() { ["manifest"] = Copy(archive.Manifest), ["archiveSha256"] = archive.Sha, ["warnings"] = warnings,
-            ["targetFingerprint"] = Fingerprint(c.Root), ["fileCount"] = archive.Manifest["files"].AsArray().Count,
+            ["targetFingerprint"] = Fingerprint(c.Root), ["previewUserBinding"] = c.SessionBinding,
+            ["fileCount"] = archive.Manifest["files"].AsArray().Count,
             ["totalBytes"] = archive.Manifest["files"].AsArray().Sum(f => f["size"].GetValue<long>()) };
     }
     private static JsonObject MakeManifest(Context c, string root, out Snapshot scan)

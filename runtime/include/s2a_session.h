@@ -21,6 +21,8 @@ typedef void (*s2a_restart_callback)(int result, const char *detail, void *conte
 // Timeout reports failure once and seals rebuilding; an execution worker may
 // still own old resources. Failure is not proof that cleanup has completed.
 int s2a_host_restart(s2a_restart_callback callback, void *context);
+// 完整停止并退休当前游戏会话，但不启动新局（返回游戏库用）：退休成功后会话置于 STARTING，等待下一款游戏调用 s2a_host_start_selected_game。
+int s2a_host_stop(s2a_restart_callback callback, void *context);
 int s2a_host_session_state(void);
 // 重启完成登记点（进程级，壳在启动时登记一次；会话复位不清）：任何发起方（设置页 / 游戏 ExecuteProgram /
 // 测试开关）的进程内重启，新局起来后都在控制线程上调一次，generation 是新会话代号；失败 / 超时不调（失败已报红）。

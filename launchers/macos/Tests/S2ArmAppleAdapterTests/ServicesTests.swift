@@ -188,7 +188,7 @@ final class SettingsProviderTests: XCTestCase {
 }
 
 final class PlayServiceTests: XCTestCase {
-    func testPlaySubmitsLaunchWithFrozenChoicesStopCancelsAndOnlyOneRuns() throws {
+    func testPlaySubmitsLaunchWithFrozenChoicesStopCancelsAndDuplicatePairIsRejected() throws {
         let box = try Sandbox(); defer { box.remove() }
         let runner = FakeRunner()
         runner.script = { _ in ([eventLine("stage", message: "验证运行文件"), eventLine("stage", message: "游戏运行中")], 0, true) }
@@ -200,7 +200,7 @@ final class PlayServiceTests: XCTestCase {
                       onEvent: { if $0.type == "stage" { stages.append($0.message) } },
                       onFinish: { outcome = $0; done.fulfill() })
         XCTAssertTrue(play.isRunning)
-        XCTAssertThrowsError(try play.play(gameId: "0100B")) { XCTAssertEqual(($0 as? JobClientError)?.message, "已有一局在运行，请先停止。") }
+        XCTAssertThrowsError(try play.play(gameId: "0100A")) { XCTAssertEqual(($0 as? JobClientError)?.message, "同一游戏和用户已有一局在运行，请先停止。") }
         let req = try XCTUnwrap(runner.starts.first?.request)
         XCTAssertEqual(runner.starts.count, 1)
         XCTAssertEqual(req["operation"] as? String, "launch")
@@ -216,6 +216,46 @@ final class PlayServiceTests: XCTestCase {
         XCTAssertEqual(stages, ["验证运行文件", "游戏运行中"])
         XCTAssertEqual(outcome?.state, .cancelled)
         XCTAssertFalse(play.isRunning)
+    }
+
+    func testSameGameDifferentUsersAndExactTaskCancellation() throws {
+        let box = try Sandbox(); defer { box.remove() }
+        let runner = FakeRunner()
+        runner.script = { _ in ([], 0, true) }
+        let play = PlayService(client: client(box, runner))
+        let firstDone = expectation(description: "first finished")
+        let secondDone = expectation(description: "second finished")
+        let first = try play.play(gameId: "0100A", userId: "01", onFinish: { _ in firstDone.fulfill() })
+        let second = try play.play(gameId: "0100A", userId: "02", onFinish: { _ in secondDone.fulfill() })
+        XCTAssertEqual(Set(play.sessions.map(\.userId)), ["01", "02"])
+        XCTAssertNil(play.current)
+        XCTAssertThrowsError(try play.play(gameId: "0100A", userId: "02"))
+        XCTAssertThrowsError(try play.play(gameId: "0100A")) // implicit 01 is the same pair
+        XCTAssertEqual(runner.starts.map { $0.request["userId"] as? String }, ["01", "02"])
+        play.stop() // ambiguous legacy stop must not terminate either session
+        play.stop(taskId: "not-owned")
+        XCTAssertEqual(runner.handles.map(\.terminated), [0, 0])
+        play.stop(taskId: first.id)
+        wait(for: [firstDone], timeout: 5)
+        testQueue.sync {}
+        XCTAssertEqual(play.sessions.map(\.taskId), [second.id])
+        XCTAssertEqual(play.current?.id, second.id)
+        XCTAssertEqual(runner.handles.map(\.terminated), [1, 0])
+        play.stop(taskId: first.id) // late controls cannot hit the remaining game
+        play.stop(taskId: second.id)
+        wait(for: [secondDone], timeout: 5)
+        XCTAssertFalse(play.isRunning)
+    }
+
+    func testFailedStartReleasesReservationAndUserOverrideIsRejected() throws {
+        let box = try Sandbox(jobs: false); defer { box.remove() }
+        let runner = FakeRunner()
+        let play = PlayService(client: client(box, runner))
+        XCTAssertThrowsError(try play.play(gameId: "0100A", userId: "02"))
+        XCTAssertFalse(play.isRunning)
+        XCTAssertThrowsError(try play.play(gameId: "0100A", userId: "../02"))
+        XCTAssertThrowsError(try play.play(gameId: "0100A", arguments: ["userId": "02"]))
+        XCTAssertTrue(runner.starts.isEmpty)
     }
 
     func testUILanguageIsPassedThroughForTheJobLayerToResolve() throws {

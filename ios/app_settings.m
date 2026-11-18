@@ -8,6 +8,8 @@ static NSString *sgrade_running_gid(void) { const char *g = getenv("S2A_LAUNCH_G
 void s2a_ios_sgrade_counts(NSString *gid, NSInteger *cheatOn, NSInteger *cheatAll, NSInteger *patchOn, NSInteger *patchAll);   // ios/game_options.m
 #import "app_settings.h"
 #import "s2a_l10n.h"
+#import "input_settings.h"
+#import "input_config.h"
 #import "settings.h"
 #import "play_layout.h"
 // 弱链接[lab]：s2a_fps_cap_reason（runtime/src/fps.c：60 帧降档原因 0 无 / 1 热 / 2 低电量 / 3 A/B 测原帧率段；输入工作台不链原生核，取不到就不写降档副标题）
@@ -87,6 +89,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     NSInteger g = self.groups[section].integerValue;
     if (g == 8 || g == 10) return nil;   // S 级优化：金色头（viewForHeaderInSection）；10：开发与诊断入口一行，不要组头
     if (g == 6) return S2AL(@"play.group");
+    if (g == 1) return S2AL(@"vpad.menu.pad");
     if (g == 7) return S2AL(@"settings.group.language");
     if (g == 11) return S2AL(@"mods.group");
     return g == 2 ? nil : S2AL(@"cpatch.group.gfx");   // 2：开发者页，标题在导航栏
@@ -95,6 +98,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     switch (self.groups[section].integerValue) {
         case 8: return nil;   // S 级优化
         case 6: return S2AL(@"play.footer");
+        case 1: return nil;
         case 7: {   // 选的（跟随系统 = 系统语言）这款不支持：说明里写明起局实际用哪种（11-14 维护者：标出来、不弹窗；规则同宿主 SystemLocale.TitleFallback）
             NSString *note = s2a_ios_game_language_note();
             return note ? [NSString stringWithFormat:@"%@\n%@", note, S2AL(@"settings.footer.language")] : S2AL(@"settings.footer.language");
@@ -194,8 +198,9 @@ static UILabel *textLabel(UIFontTextStyle style) {
     //   宽屏（安全区宽 ≥ 900 点、不是辅助功能大字号）分两栏（#1160，同 0.3.9 自适应）：左 屏幕 / 画面，右 S 级优化 / 语言 / 开发与诊断入口；
     //   iPhone 横屏扣掉安全区不到 900 点，仍单栏
     BOOL wide = self.view.safeAreaLayoutGuide.layoutFrame.size.width >= 900 && !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
-    NSArray *groups = wide ? @[@6, @0] : @[@6, @0, @8, @11, @7, @10];
-    NSArray *right = wide ? @[@8, @11, @7, @10] : @[];   // 11：资源 Mod（下次进游戏生效，属低频、要重启的一类）
+    NSMutableArray *groups = [NSMutableArray arrayWithArray:wide ? @[@6, @0, @1] : @[@6, @0, @1, @8, @11, @7]];
+    NSMutableArray *right = [NSMutableArray arrayWithArray:wide ? @[@8, @11, @7] : @[]];   // 11：资源 Mod（下次进游戏生效，属低频、要重启的一类）
+    [wide ? right : groups addObject:@10];
     _maxWidth.constant = wide ? 1240 : 620;
     if (![_left.groups isEqual:groups] || ![_right.groups isEqual:right]) {
         _left.groups = groups; _right.groups = right; _right.view.hidden = !wide;
@@ -411,9 +416,10 @@ static UILabel *textLabel(UIFontTextStyle style) {
 }
 - (NSInteger)rowsForGroup:(NSInteger)group {
     if (group == 6) return s2a_ios_play_resizable() ? 1 : 2;   // 自由窗口（Duo 内屏 / iPad）方向交给系统，「方向」那行不列（#1364）
+    if (group == 1) return 1;   // 1P–4P 手柄配置（input_settings.m）
     if (group == 7) return 2;   // 界面语言、游戏语言
     if (group == 8) return 1 + (_patchGroups.count > 0);   // S 级优化：社区补丁（这款有才列）+ 金手指
-    if (group == 2) return 5;   // 开发者页：打开时导出 / 诊断局 / 触屏诊断 / S2Arm 浮层 / Metal 浮层
+    if (group == 2) return 6;   // 开发者页：打开时导出 / 诊断局 / 触屏诊断 / S2Arm 浮层 / Metal 浮层 / 1P–4P 手柄设置
     if (group == 10) return 1;   // 主页面末尾「开发与诊断」入口（#1160）
     if (group == 11) return 1;   // 资源 Mod 入口（vpad_mods.m）
     return group == 0 ? (NSInteger)[self graphicsRows].count : 0;
@@ -535,11 +541,25 @@ static UILabel *textLabel(UIFontTextStyle style) {
             [s2a_ios_settings_defaults() setObject:values[index] forKey:option[@"key"]]; [weakSelf refresh];
         } identifier:@"settings.filter"];
     }
+    if (group == 1 || (group == 2 && row == 5)) {
+        UITableViewCell *cell = [self baseCell:S2AL(@"vpad.menu.pad14")];
+        if (group == 1) cell.imageView.image = [UIImage systemImageNamed:@"gamecontroller"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.accessibilityIdentifier = @"settings.input.live";
+        cell.userInteractionEnabled = s2a_ios_input_config_current() != NULL;
+        if (!cell.userInteractionEnabled) cell.detailTextLabel.text = S2AL(@"settings.notStarted");
+        return cell;
+    }
     static const NSInteger dev[] = {3, 10, 8, 4, 5};   // toggleKeys 下标
     return [self toggleCell:dev[MIN(MAX(row, 0), 4)]];
 }
 - (void)selectGroup:(NSInteger)group row:(NSInteger)row {
     if (group == 10) { [self openDeveloper]; return; }
+    if (group == 1 || (group == 2 && row == 5)) {
+        UIViewController *input = s2a_ios_input_settings_controller();
+        if (input) [self.navigationController pushViewController:input animated:YES];
+        return;
+    }
     if (group == 11) {
         UIViewController *mods = s2a_mods_controller();
         NSMutableArray *bar = [NSMutableArray array];   // 右上：设置页自己的关闭键 + mod 页的「导入文件夹」（同金手指页）

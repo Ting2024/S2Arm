@@ -95,6 +95,7 @@ extension LauncherView {
             moreRow(txt("game.display"), "slider.horizontal.3") { displayFor = game.id }
             moreRow(txt("game.saves"), "tray.full") { saveFor = game.id }
             moreRow(txt("game.input"), "gamecontroller") { inputFor = game.id }
+            moreRow(loc.t("game.verify"), "checkmark.shield") { model.verifyGame(game) }
             moreRow(txt("game.diag"), "paperplane") { model.diagUploadFor = game.id }   // 上传给开发者；上传没成在弹窗里退回导出
             if !game.location.path.isEmpty {
                 moreRow(txt("library.menu.reveal"), "folder") { model.reveal(game) }
@@ -146,10 +147,11 @@ extension LauncherView {
 
     /// 卡片和大图上的状态：两端都算（原作者只看 Mac 版）。
     func statusLine(_ game: GameSummary) -> (text: String, color: Color) {
-        if model.mainBusy && model.session?.gameID == game.id {
+        if model.isPlaying(gameID: game.id) { return (loc.t("s2arm.library.running"), LauncherPalette.building) }
+        if (model.busy && model.session?.gameID == game.id) || (model.phoneBusy && model.phoneSession?.gameID == game.id) {
             return (loc.t(model.session?.kind == .play ? "s2arm.library.running" : "s2arm.job.running"), LauncherPalette.building)
         }
-        if model.exportQueue.contains(where: { $0.game.id == game.id }) { return (txt("export.status.queued"), LauncherPalette.building) }
+        if model.exportQueue.contains(where: { $0.game.id == game.id }) || model.phoneQueue.contains(where: { $0.game.id == game.id }) { return (txt("export.status.queued"), LauncherPalette.building) }
         // 存放位置（游戏库结构 v3）：移动硬盘没插 → 灰色「未连接」，插回来自动恢复；文件夹没了 → 红字，点卡片重新指定或移除
         // 未连接给具体路径（同出包页下拉框）：卷名会重名（内置盘一律「系统盘」），看不出是哪个位置没连上
         if game.location.state == "offline" {

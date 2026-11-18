@@ -187,6 +187,7 @@ def brief(s):
 AI_NEXT = {
     'keys_missing': ('ask', '问玩家自己导出的 prod.keys 放在哪，然后 s2armctl keys <路径>'),
     'keys_invalid': ('ask', 'prod.keys 文件不完整：请玩家重新导出一份，然后 s2armctl keys <路径>'),
+    'hash_mismatch': ('human', '保留日志排查读取器兼容性及校验策略差异；不要仅据此认定文件损坏或更换密钥'),
     'content_unreadable': ('human', '请玩家核对源文件和票据是否完整'),
     'ticket_missing': ('human', '请玩家核对源文件是否含有所需票据'),
     'content_truncated': ('human', '请玩家从原始位置重新复制完整的游戏文件'),

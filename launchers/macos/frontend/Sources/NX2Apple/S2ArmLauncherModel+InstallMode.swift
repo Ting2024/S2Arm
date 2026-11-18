@@ -65,8 +65,12 @@ extension S2ArmLauncherModel {
         let accept = acceptDropped ? accept.union(["acceptDropped"]) : accept
         let mode = mode ?? (iosAfterPack == "export" ? "export" : nil)   // 没指定这次怎么走：按出包页「出完之后」玩家选的那条（选了自签 = 不连手机、导出更新后的自签包）
         guard !phoneBusy else {   // 出包等主槽作业照跑也能更新（手机槽）；手机槽忙 → 排队
-            phoneQueue.append((nil, { [weak self] in self?.updatePhone(acceptStale: acceptStale, repack: repack, language: language, device: device, accept: accept, ask: ask,
-                                                                       mode: mode, sgradeUpgrade: sgradeUpgrade) })); return
+            let dummy = GameSummary(id: "", name: BackendText.launcherText("update.running", language: language), compatibility: "playable")
+            phoneQueue.append(QueuedPhoneJob(kind: .installUpdate, game: dummy, customRun: { [weak self] in
+                self?.updatePhone(acceptStale: acceptStale, repack: repack, language: language, device: device, accept: accept, ask: ask,
+                                  mode: mode, sgradeUpgrade: sgradeUpgrade)
+            }))
+            return
         }
         updateConfirm = nil; updateRepack = repack
         // 更新哪台：壳旧了的那台（phoneUpdates 的设备记录键）；没有就是玩家选的那台。一律带上，作业层不自己挑（v0.3.0 验收测出连着两台报错；11-11 设备号贯穿所有装机入口）
@@ -75,6 +79,11 @@ extension S2ArmLauncherModel {
         selfSigning = mode == "export"
         lastUpdateArgs = UpdateArgs(acceptStale: acceptStale, repack: repack, language: language, device: device, accept: accept, mode: mode, sgradeUpgrade: sgradeUpgrade)
         start(JobSession(kind: .installUpdate, gameID: nil, name: BackendText.launcherText("update.running", language: language))) { [weak self] sink in
+            var device = device
+            if device == nil, mode != "export", let self, self.connectedDevices.isEmpty {
+                await self.refreshTargets()
+                device = self.phoneUpdate?.device ?? self.installDeviceID
+            }
             do {
                 let r = try await self?.provider.updatePhone(acceptStale: acceptStale, accept: accept, mode: mode, sgradeUpgrade: sgradeUpgrade, device: device, events: sink) ?? [:]
                 let names = Dictionary((self?.games ?? []).map { ($0.id.uppercased(), $0.name) }, uniquingKeysWith: { a, _ in a })

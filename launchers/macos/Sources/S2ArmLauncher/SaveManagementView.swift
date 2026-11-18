@@ -36,8 +36,11 @@ struct SavePreview: Decodable {
     var previewLibraryId: String; var fileCount: Int; var totalBytes: Int64
     // 社区存档目录结构存疑时后端给的一句提示（pack/jobs/saves.py STRUCTURE_NOTICE），旧后端没有这个字段
     var notice: String?
+    var previewUserBinding: String?
     var request: [String:Any] {
-        ["archiveSha256":archiveSha256,"targetFingerprint":targetFingerprint,"previewLibraryId":previewLibraryId]
+        var result: [String:Any] = ["archiveSha256":archiveSha256,"targetFingerprint":targetFingerprint,"previewLibraryId":previewLibraryId]
+        if let binding = previewUserBinding { result["previewUserBinding"] = binding }
+        return result
     }
 }
 

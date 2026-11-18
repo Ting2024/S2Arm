@@ -19,6 +19,12 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
+struct SaveTarget: Identifiable {
+    let id = UUID()
+    let gameID: String
+    let user: LauncherUser
+}
+
 struct LauncherView: View {
     @ObservedObject var model: S2ArmLauncherModel
     @ObservedObject var home: HomeLibraryState
@@ -74,6 +80,23 @@ struct LauncherView: View {
             noticeBar
             phoneUpdateBar
             libraryNoticeBar
+            ForEach(model.playSessions) { session in
+                let play = session.job
+                HStack {
+                    Image(systemName: "gamecontroller")
+                    Text(play.name + " · " + session.user.id + " " + session.user.name).font(.manrope(13, .semibold))
+                    Text(loc.backend(play.stage)).font(.manrope(12)).foregroundStyle(.secondary)
+                    Spacer()
+                    if case .finished = play.phase {
+                        Text(loc.backend(play.message)).font(.manrope(12)).lineLimit(2)
+                        Button(loc.t("s2arm.play.back")) { model.dismissPlayResult(id: session.id) }
+                    } else {
+                        Button(loc.t("s2arm.play.stop")) { model.stopPlay(id: session.id) }
+                            .disabled(play.phase == .stopping)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 10)
+            }
             if model.batchShown {
                 BatchExportView(model: model, covers: covers, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
             } else if let result = model.viewingResult, let run = result.export {
@@ -179,6 +202,7 @@ struct LauncherView: View {
             Button(txt("phone.drop.cancel"), role: .cancel) { model.libraryConfirm = nil }
         } message: { Text(loc.backend(model.libraryConfirm?.message ?? "")) }
         .sheet(isPresented: $model.showAddGames) { ImportSheet(model: model, kind: .games).environmentObject(loc) }
+        .sheet(isPresented: $model.showUsers) { UserManagementSheet(model: model).environmentObject(loc) }
         // 打开时最多一个更新弹窗（有新版 / 这版更新了什么），只给最新一期；关掉（含 Esc）= 这一版不再弹
         .sheet(isPresented: Binding(get: { model.updatePopup != nil && !model.showAddGames && !model.showKeys && !model.showEnvironment }, set: { if !$0, model.updatePopup != nil { model.closeUpdatePopup() } })) {
             if model.updatePopup?["kind"] as? String == "feature" {   // 大版本首次打开的新功能大窗（docs/site/feature.json，updater.py feature_spotlight）
@@ -610,16 +634,19 @@ struct LauncherView: View {
         }
     }
 
-    /// 装机弹窗关着时：手机作业在跑 → 「正在装到 iPhone · 查看进度」，点了回到同一个作业（弹窗显示 model.session，不新起安装）；
+    /// 装机弹窗关着时：手机作业在跑 → 「正在装到 iPhone · 查看进度」，点了回到同一个作业（弹窗显示 model.phoneSession / model.session，不新起安装）；
     /// 跑完还没回去看 → 「已装好 / 没装完 · 查看结果」（#308，Mac 与 Windows 同一套入口）。
     @ViewBuilder private var phonePill: some View {
         if installFor == nil {
-            if let s = model.phoneSession, S2ArmLauncherModel.phoneKinds.contains(s.kind), let id = s.gameID {
+            if let s = model.phoneSession ?? (model.session.flatMap { S2ArmLauncherModel.phoneKinds.contains($0.kind) ? $0 : nil }), let id = s.gameID {
                 Button { installFor = id } label: {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.mini)
                         Text(txt(model.selfSigning && s.kind == .install ? "install.pill.exporting" : "install.pill.running").replacingOccurrences(of: "{0}", with: s.name).replacingOccurrences(of: "{1}", with: model.installTargetLabel)).font(.manrope(12.5, .semibold)).lineLimit(1)
                         if let f = s.progress.fraction { Text("\(Int(f * 100))%").font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary) }
+                        if !model.phoneQueue.isEmpty {
+                            Text(txt("export.pill.queue").replacingOccurrences(of: "{0}", with: "\(model.phoneQueue.count)")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")

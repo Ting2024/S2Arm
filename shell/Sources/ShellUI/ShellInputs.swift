@@ -273,6 +273,8 @@ public struct ShellActions {
     public var onUseShellCloud: ((String) -> Void)?
     public var onClearShellData: (() -> Void)?
     public var onClearShellCloud: (() -> Void)?
+    /// S2Arm: settings → "Storage" (opens the storage breakdown and staged-upload cleanup sheet). Nil hides the row.
+    public var onManageStorage: (() -> Void)?
     /// S2Arm: settings → "Report a problem" (the host packs the logs, uploads them and shows a short code). Nil hides the row.
     public var onReportProblem: (() -> Void)?
     public var onGlobalPadMapChange: ((String, String) -> Void)?
