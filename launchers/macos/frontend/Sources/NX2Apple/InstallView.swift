@@ -16,6 +16,11 @@ struct InstallView: View {
     var onOpenSettings: (() -> Void)? = nil
     @State private var showRemoveConfirm = false
     @State private var showRestoreConfirm = false
+    @State private var hostOnly = false
+    @State private var confirmHost = false
+    @State private var hostPreview: HostInstallPreview?
+    @State private var previewingHost = false
+    @State private var previewError: String?
 
     private var game: GameSummary? { model.games.first { $0.id == gameID } }
     private static let pollSeconds: UInt64 = 5
@@ -53,8 +58,16 @@ struct InstallView: View {
             } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    if let previewError { Text(loc.backend(previewError)).foregroundStyle(LauncherPalette.danger) }
+                    Picker(loc.t("s2arm.install.operation"), selection: $hostOnly) {
+                        Text(loc.t("s2arm.install.resourcesOnly")).tag(false)
+                        Text(loc.t("s2arm.install.hostOnly")).tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(loc.t(hostOnly ? "s2arm.install.hostHelp" : "s2arm.install.resourceHelp"))
+                        .font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     // 上一次手机作业没成：同一个结局组件（原因 + 下一步 + 复制错误摘要 + 详细过程），下面照旧是清单，改好了直接再点
-                    if let failed = model.inlineFailure, [.install, .installRemove, .installRestore].contains(failed.kind),
+                    if let failed = model.inlineFailure, [.install, .installHost, .installRemove, .installRestore].contains(failed.kind),
                        let last = model.lastPhoneSession, last.kind == failed.kind {
                         PhoneJobPanel(model: model, session: last)
                     }
@@ -148,15 +161,33 @@ struct InstallView: View {
                         .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa").controllerShortcut(.secondary)
                 }
                 Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, .back, focused: true)
-                Button(loc.t("s2arm.install.start")) {
-                    if let game { model.clearInlineFailure(); model.install(game) }
+                Button(loc.t(hostOnly ? "s2arm.install.hostOnly" : "s2arm.install.start")) {
+                    if hostOnly {
+                        previewingHost = true; hostPreview = nil; previewError = nil
+                        Task {
+                            defer { previewingHost = false }
+                            do {
+                                if model.installDeviceID == nil, model.connectedDevices.isEmpty { await model.refreshTargets() }
+                                hostPreview = try await model.provider.previewHost(gameId: gameID, device: model.installDeviceID)
+                                confirmHost = true
+                            } catch { previewError = error.localizedDescription }
+                        }
+                    } else if let game {
+                        model.clearInlineFailure(); model.install(game)
+                    }
+                }
+                .confirmationDialog(loc.t("s2arm.install.hostOnly"), isPresented: $confirmHost, titleVisibility: .visible) {
+                    Button(loc.t("s2arm.install.hostConfirm")) {
+                        if let game, let hostPreview { model.clearInlineFailure(); model.installHost(game, confirmation: hostPreview.token, device: model.installDeviceID); self.hostPreview = nil }
+                    }
+                    Button(loc.t("launch.done"), role: .cancel) {}
+                } message: {
+                    Text(loc.t(hostPreview?.unknownInstallation == true ? "s2arm.install.unknownConfirm" : "s2arm.install.hostHelp") +
+                         "\n" + (hostPreview?.installedVersion ?? "") + "\n" + (hostPreview?.games.joined(separator: ", ") ?? ""))
                 }
                 .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
-                // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
-                // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因。
-                // 别的作业在跑不挡（11-16 维护者「出包时也能装别的游戏」）：手机上一个作业没完 / 这款正在出包就排队，只有这款已排上时置灰
-                .disabled(queued)
-                .opacity(queued ? 0.45 : 1)
+                .disabled(queued || previewingHost)
+                .opacity(!queued ? 1 : 0.45)
             }
             .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             }
@@ -189,7 +220,7 @@ struct InstallView: View {
     }
     /// 这一款在手机槽里跑着的装机 / 删除 / 装回（别款的手机作业不画进这款的窗）
     private var installJob: JobSession? {
-        guard let s = model.phoneSession, [.install, .installRemove, .installRestore].contains(s.kind), s.gameID == gameID else { return nil }
+        guard let s = model.phoneSession, [.install, .installHost, .installRemove, .installRestore].contains(s.kind), s.gameID == gameID else { return nil }
         return s
     }
     private var queued: Bool { model.phoneQueued(gameID) }
@@ -230,7 +261,7 @@ struct InstallView: View {
             if model.installOpenToFinish {
                 Text(text("install.done.open")).font(.manrope(15, .semibold)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
-            Text(trustNote).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Text(hostOnly ? loc.t("s2arm.install.hostDone") : trustNote).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             if game?.iphoneFree == true {
                 Text(text("install.done.free")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }

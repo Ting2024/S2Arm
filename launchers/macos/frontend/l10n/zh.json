@@ -1774,5 +1774,15 @@
   "s2arm.env.widget.title": "装到 iPhone 时带主屏小组件",
   "s2arm.env.widget.detail": "iPhone 桌面上的游戏机样子小组件：显示最近玩的游戏和玩得最多的游戏，点封面直接开。用免费 Apple ID 时，每次新装会多用一个 App ID 名额（7 天 10 个）",
   "home.card.daysLeft": "还剩 %d 天",
-  "home.card.expired": "签名已过期"
+  "home.card.expired": "签名已过期",
+  "s2arm.install.operation": "安装方式",
+  "s2arm.install.resourcesOnly": "推送 / 安装资源",
+  "s2arm.install.hostOnly": "仅安装 / 更新 / 续签 App",
+  "s2arm.install.resourceHelp": "仅在需要时更新容器并推送游戏资源，保留已有设备状态。",
+  "s2arm.install.hostHelp": "仅安装、更新或续签手机上的 S2Arm 宿主 App，不会上传或改写任何游戏资源与存档。",
+  "s2arm.install.hostConfirm": "确认仅更新宿主 App",
+  "s2arm.install.unknownConfirm": "手机上当前安装的 App 版本或签名来源未能核实；继续将仅替换宿主 App，不传资源与不改存档。",
+  "s2arm.install.hostDone": "手机上的 S2Arm 宿主已更新 / 续签完成（未传输游戏资源）。",
+  "s2arm.job.title.installHost": "正在安装 / 更新手机 App",
+  "s2arm.job.done.installHost": "手机 App 安装 / 更新完成"
 }

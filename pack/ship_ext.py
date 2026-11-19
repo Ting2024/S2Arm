@@ -513,6 +513,11 @@ def cmd_container_drop(a):
         shutil.copytree(base, app, symlinks=True)
         shutil.rmtree(app / GAMES / a.game)
         (app / game_images(a.game)).unlink()
+        identities = app / "s2a_game_inputs.json"
+        if identities.is_file():
+            inputs = json.loads(identities.read_text())
+            inputs = {g: value for g, value in inputs.items() if g in {e["title_id"] for e in left}}
+            identities.write_text(json.dumps(inputs, sort_keys=True) + "\n")
         (app / CATALOGUE).write_text(json.dumps(dict(cat, games=left), ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
         os.replace(app, out)
     finally:

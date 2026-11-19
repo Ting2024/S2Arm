@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+from xml.parsers.expat import ExpatError
 import re
 import shutil
 import subprocess
@@ -145,6 +146,75 @@ SPARKLE_FEED = "https://dl.s2arm.com/appcast/mac.xml"
 SPARKLE_PUBLIC_KEY = "WoZkGLOTuLU2zl0gsPX+4sTKRsIN9ahBEfj0ulkqOqc="   # 验签公钥（Ed25519）；对应私钥只在发版机，不进仓库
 
 
+def verify_mobile_query_tool(resources):
+    """Exercise the shipped executable offline, not just its manifest hash."""
+    exe = Path(resources) / 'Engine/Binaries/Prepare/devpush/s2a-devpush'
+    try:
+        if exe.is_symlink():
+            raise ValueError('linked device tool')
+        p = subprocess.run([str(exe), '--capabilities'], capture_output=True, timeout=10)
+        d = plistlib.loads(p.stdout) if p.returncode == 0 else None
+        if (isinstance(d, dict) and type(d.get('schema')) is int and d['schema'] == 1
+                and isinstance(d.get('operations'), list) and 'app-info' in d['operations']):
+            return
+    except (OSError, ValueError, ExpatError, subprocess.TimeoutExpired):
+        pass
+    raise ValueError('Bundled s2a-devpush lacks the required app-info capability or cannot run')
+
+
+def verify_mobile_delivery(resources, source_root=ROOT):
+    resources, source_root = Path(resources), Path(source_root)
+    sys.path.insert(0, str(ROOT))
+    from pack import ios_host
+    required = {"main.py", "install.py", "ipa.py", "mobile_lifecycle.py",
+                "mobile_confirmation.py", "core.py", "errors.py"}
+    required.update(p.name for p in (source_root / "pack/jobs").glob("*.py"))
+    for name in sorted(required):
+        expected = (source_root / "pack/jobs" / name).read_bytes()
+        for directory in (resources / "Jobs", resources / "Engine/pack/jobs"):
+            actual = directory / name
+            if actual.is_symlink() or not actual.is_file() or actual.read_bytes() != expected:
+                raise ValueError("Mobile installation protection missing or stale: " + name)
+    helper = resources / "Engine/pack/ios_host.py"
+    if (helper.is_symlink() or not helper.is_file() or
+            helper.read_bytes() != (source_root / "pack/ios_host.py").read_bytes()):
+        raise ValueError("Mobile host verifier missing or stale")
+    verify_mobile_query_tool(resources)
+    return ios_host.load(resources / "IOSHost")
+
+
+def bundle_ios_host(shell, dest, update=None):
+    sys.path.insert(0, str(ROOT))
+    from pack import ios_host
+    from pack.shell import manifest
+    shell, dest = Path(shell), Path(dest)
+    sid = manifest.verify(shell / "root", shell / "manifest.json")["details"]["shellId"]
+    if update:
+        doc = ios_host.load(update)
+        if sid not in doc["compatibleShellIds"]:
+            raise SystemExit("iOS 宿主更新与随包 Shell 不兼容")
+        (dest / "root").mkdir(parents=True)
+        for name in doc["files"]:
+            target = dest / "root" / name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(Path(update) / "root" / name, target)
+    else:
+        (dest / "root").mkdir(parents=True)
+        files = {}
+        for p in sorted((shell / "root").rglob("*")):
+            if not p.is_file(): continue
+            name = p.relative_to(shell / "root").as_posix()
+            if name.split("/")[0] not in ("S2Arm", "Frameworks", "S2ArmShellUI_ShellUI.bundle", "Settings.bundle",
+                                          "en.lproj", "es.lproj", "fr.lproj", "ja.lproj", "zh-Hans.lproj", "zh-Hant.lproj"):
+                continue
+            target = dest / "root" / name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+            files[name] = [p.stat().st_size, hashlib.sha256(p.read_bytes()).hexdigest()]
+        doc = dict(schema=1, files=files, compatibleShellIds=[sid], replaces=[])
+        doc["id"] = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
+    (dest / "host.json").write_text(json.dumps(doc, sort_keys=True, indent=2) + "\n")
+    ios_host.load(dest)
+
+
 def main():
     os.environ["MACOSX_DEPLOYMENT_TARGET"] = runtime_sources.deployment_target()   # clang、cmake、rustc 都读它：包内自己编的程序不能比声明的系统高
     parser = argparse.ArgumentParser(description=__doc__)
@@ -275,7 +345,9 @@ def main():
     seal_runtime(resources)   # 预编 .pyc 签进包 + 内置 Python 关写字节码：运行时谁调都写不进包（Engine 在 bundle 里写清单前预编）
     bundle(resources / "Engine", args.developer_dir)
     bundle_shell(resources / "Engine/engine.json", resources / "Shell", env)
-    bundle_shell(resources / "Engine/engine.json", resources / "Shell-tvOS", env, "tvos")   # Apple TV 预编壳（0.5.2：0.5.0 发版没带，出 Apple TV 包必败）
+    bundle_shell(resources / "Engine/engine.json", resources / "Shell-tvOS", env, "tvos")
+    bundle_ios_host(resources / "Shell", resources / "IOSHost", os.environ.get("S2A_RELEASE_IOS_HOST"))
+    verify_mobile_delivery(resources)   # Apple TV 预编壳（0.5.2：0.5.0 发版没带，出 Apple TV 包必败）
     info = dict(**frontend_layout.info_identity(front), CFBundlePackageType="APPL",
                 CFBundleIconFile="S2Arm", LSMinimumSystemVersion=runtime_sources.deployment_target(),
                 NSHighResolutionCapable=True, CFBundleDevelopmentRegion="en", CFBundleLocalizations=["en", "zh-Hans", "zh-Hant", "ja", "es", "fr"],   # 同界面语言（frontend/l10n）；系统语言不在其中时照 CFBundleDevelopmentRegion 用英文

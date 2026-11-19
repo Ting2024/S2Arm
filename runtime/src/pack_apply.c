@@ -502,10 +502,11 @@ int s2a_pack_apply(const char *docs) {
         // 截短的推送包（推送中途被杀留下的）永远解不开：删掉它、它后面所有待解包和推送记录 .pushed，下次部署执行器只按 index.applied.tsv 补推（10-20 测试设备2 巫师3 同一个残包连红 4 局）。
         //   只删残包不够（10-21 测试出包线）：执行器见 .incoming 里还有包就把 .pushed 记的文件当「已推」，残包里的文件不补推；后面的包解完照写 index.applied.tsv = 全部目标，
         //   机上缺文件 / 留半截文件却记成已应用。待解包全删 = 机上状态退回 index.applied.tsv 那一刻，执行器补推的就是缺的全部
-        if (rc) { int del = 0;
-            if (g_untar_trunc && !unlink(t)) { del = 1; for (int j = i + 1; j < nn; j++) { char u[2400]; snprintf(u, sizeof u, "%s/%s", inc, names[j]); del += !unlink(u); }
-                char pp[2100]; snprintf(pp, sizeof pp, "%s/.pushed", root); unlink(pp); }
-            snprintf(what, sizeof what, "解 %s%s", names[i], del ? "（截短包：已删它与其后待解包、推送记录，下次部署按已应用索引补推）" : ""); }
+        // Keep interrupted archives and every later completed batch. The sender
+        // owns resumable transfer state; import must never discard its progress.
+        if (rc) {
+            snprintf(what, sizeof what, "解 %s%s", names[i],
+                     g_untar_trunc ? "（截短包：已保留，等待续传；后续分卷未删除）" : ""); }
         else { unlink(t); ntar++; if (s2a_pack_apply_progress) s2a_pack_apply_progress(i + 1, nn); PHASE(1, (uint64_t)(i + 1), (uint64_t)nn); log_line(logp, "进度：解开 %s（%u/%d）%u 个文件 %llu MB（%.1f 秒）", names[i], i + 1, nn, nf - f0, (unsigned long long)((nb - b0) >> 20), (now_ns() - t1) / 1e9); }
     }
     if (!rc) { int r = img_extract(root, &nf, &nb); if (r) { rc = r; from_img = 1; snprintf(what, sizeof what, "从 game.img 解小文件（%s）", r == -11 ? "格式号不认识，请更新 S2Arm" : r == -10 ? "IMG 坏或没传完" : "写失败"); } }
@@ -1162,7 +1163,7 @@ int s2a_img_scan(const char *proc_docs) {   // 回前台 / 「重新检查」可
 // 资源还在传（11-02 维护者 测试设备2 暗黑3：推 21.7 GB 中途点开 App，已到的几批被解开、核对时 index.tsv 还没到，报「返回 -8」要玩家删文件夹重拷）。
 //   推送契约（tools/push_pack.py）：开推先把机上 manifest.json 置空，各批 tar 推进 .incoming/，index.tsv 与 manifest.json 最后推。所以下面任一条成立 = 这次推送还没完，不能开始解：
 //   ① index.tsv / manifest.json 不在或读不出 index_sha256（首次推送清单还没到 / 这次推送开头置空了）；
-//   ② 有 tar 没写完（没有归档尾：不足两块、大小不是 512 的倍数、末尾 1024 字节不全零）——在写的包去解会被当截短包，连同后面的包和 .pushed 一起删。
+//   ② 有 tar 没写完（没有归档尾：不足两块、大小不是 512 的倍数、末尾 1024 字节不全零）——在写的包不可导入，必须保留供续传。
 //   原先另有一条「清单的 index_sha256 就是 .applied = 新清单还没到」（11-02 暗黑3，那时推送不置空清单）：置空契约后它与 ① 重复，留着只剩误判——
 //   同一份清单重推、推送端用空包盖掉残批时清单没变，永远判「还在传」解不开（iOS 装机剃刀 #24）
 //   返回 1 = 还在传，why 写一句原因（日志用）

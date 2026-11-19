@@ -39,6 +39,8 @@ import AppKit
         do { let c = await post("/prepare", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/ipa", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/install", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
+        do { let c = await post("/installHostPreview", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
+        do { let c = await post("/installHost", ["gameId": "nope"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/target", ["productType": "iPhone17,1", "os": 26]).0; XCTAssertEqual(c, 400, "机型表没探过不能选") }
         do { let c = await post("/diagnostics", ["action": "x"]).0; XCTAssertEqual(c, 400) }
         do { let c = await post("/cancel", ["taskId": "t"]).0; XCTAssertEqual(c, 400, "没有在跑的作业") }

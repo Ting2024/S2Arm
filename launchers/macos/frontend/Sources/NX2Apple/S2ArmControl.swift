@@ -135,6 +135,22 @@ import S2ArmAppleAdapter
             if device == nil, !export { return .bad(Self.deviceRequired) }
             model.install(g, teamId: str("teamId"), device: device, acceptDropped: a["acceptDropped"] as? Bool ?? false,
                           accept: Self.acceptFlags(a).subtracting(["acceptDropped"]), ask: false, export: export); return .ok()
+        case ("POST", "/installHostPreview"):
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            do {
+                let p = try await model.provider.previewHost(gameId: g.id, device: str("device") ?? model.installDeviceID)
+                return .object(["token": p.token, "required": p.required,
+                                "unknownInstallation": p.unknownInstallation,
+                                "installedVersion": p.installedVersion, "games": p.games])
+            } catch { return .bad(error.localizedDescription) }
+        case ("POST", "/installHost"):
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            guard a["confirmed"] as? Bool == true, let token = str("confirmation"),
+                  token.count == 48, token.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+                return .bad("请先检测宿主并明确确认本次替换。")
+            }
+            guard model.installAllowed(g.id) else { return .bad("请先检查安装条件。") }
+            model.installHost(g, confirmation: token, device: str("device")); return .ok()
         case ("POST", "/signingProject"):
             model.openSigningProject(); return .ok()
         case ("POST", "/update-phone"):   // 更新 iPhone 上的 S2Arm（v0.3.0）：同库页右上角按钮；有要重新出包的款没给 acceptStale → 409 列出它们
@@ -319,6 +335,8 @@ import S2ArmAppleAdapter
         ["POST /batch {games:[{gameId, platforms:[mac|iphone]}], location?}", "批量出包：一批几款、每款出哪些平台（同一款先 Mac 后 iPhone，解包只做一次），location = 一批共用的存放位置；一款接一款地出，失败不挡后面、磁盘满暂停；进度看 GET /state 的 batch（summary / items）"],
         ["POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」，磁盘预检不够也照出；target = ios（iPhone / iPad，缺省）| mac | android | harmony；安卓、鸿蒙回 409「即将上线，敬请期待」"],
         ["POST /customize {gameId, name?, coverPath?}", "改游戏显示名 / 封面（JPG、PNG）；不传的不动，传空字符串恢复默认；下次装到 iPhone 时带上"],
+        ["POST /installHostPreview {gameId}", "只读检测并生成一次性确认；不安装"],
+        ["POST /installHost {gameId, confirmation, confirmed:true}", "确认后的独立宿主操作；不传资源"],
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
         ["POST /install {gameId, acceptDropped?, acceptNoBackup?, acceptStale?}", "装到 iPhone（不用先 installCheck，缺什么作业报真实原因）；可确认的失败码先问玩家、同意了带对应参数再发：container_would_drop → acceptDropped（手机上有别的电脑装的游戏这次带不上）、save_backup_failed → acceptNoBackup（覆盖前没能备份存档）、container_stale → acceptStale（旧资源包要重出）"],
         ["POST /uninstall {gameId, acceptDropped?, acceptNoBackup?}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）；acceptDropped / acceptNoBackup 同 /install"],

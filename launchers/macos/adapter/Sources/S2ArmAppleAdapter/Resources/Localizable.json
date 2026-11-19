@@ -10326,5 +10326,173 @@
  {
   "source": "这次签好的 S2Arm 没带「提高内存上限」权限：装上后能玩，但大游戏可能内存不够、开局中止。",
   "en": "The S2Arm signed this time is missing the \"Increased Memory Limit\" entitlement: it installs and runs, but large games may run out of memory and stop at launch."
+ },
+ {
+  "source": "先单独安装／更新／续签手机 App，再推送资源；推送不会自动重装已有 App。",
+  "en": "Install, update, or renew the phone app separately before pushing resources; resource transfers never reinstall an existing app."
+ },
+ {
+  "source": "先同步并核实手机宿主版本；不要卸载 App 或重传游戏资源。设备解锁后重试，仍失败时保留诊断。",
+  "en": "Sync and verify the phone host version first; do not uninstall the app or re-upload game resources. Unlock the device and retry, and keep diagnostics if it still fails."
+ },
+ {
+  "source": "更新 Mac 的 iOS 宿主组件后重试；当前手机 App、资源和存档均未改动。",
+  "en": "Update the iOS host component on Mac and retry; the phone app, resources, and saves were not modified."
+ },
+ {
+  "source": "核对手机宿主、游戏模块及签名期限",
+  "en": "Verifying phone host, game modules, and signing expiry"
+ },
+ {
+  "source": "此独立宿主操作目前仅支持 Mac。",
+  "en": "This standalone host operation is currently only supported on Mac."
+ },
+ {
+  "source": "仅安装／更新／续签 App，不传游戏资源",
+  "en": "Installing / updating / renewing app only without transferring resources"
+ },
+ {
+  "source": "手机上的游戏模块未变：只传资源，不覆盖安装 App。",
+  "en": "Game modules on iPhone are unchanged: transferring resources without overwriting the app."
+ },
+ {
+  "source": "未知安装必须先预览并明确确认替换。",
+  "en": "Unknown installation must be previewed and explicitly confirmed before replacement."
+ },
+ {
+  "source": "候选缺少确认时列出的游戏模块，已停止安装。",
+  "en": "Candidate is missing game modules listed during confirmation; installation stopped."
+ },
+ {
+  "source": "本次更新无法原样保留手机已有的其他游戏模块，已停止；不会用不完整容器覆盖。",
+  "en": "Unable to preserve existing game modules on iPhone intact; stopped without overwriting with an incomplete container."
+ },
+ {
+  "source": "检测后宿主或游戏模块发生变化，请重新检测。",
+  "en": "Host or game modules changed after inspection; please inspect again."
+ },
+ {
+  "source": "检测期间手机安装已改变，本次未覆盖。",
+  "en": "Phone installation changed during inspection; did not overwrite."
+ },
+ {
+  "source": "传输前手机 App 已不存在，本次停止；重新推送前请核对设备。",
+  "en": "Phone app is no longer installed before transfer; stopped. Please verify device before retrying."
+ },
+ {
+  "source": "上传游戏数据 {0}/{0} GB",
+  "en": "Uploading game data {0}/{0} GB"
+ },
+ {
+  "source": "字节",
+  "en": "bytes"
+ },
+ {
+  "source": "本地容器模块记录无法读取，已停止安装。",
+  "en": "Unable to read local container module records; installation stopped."
+ },
+ {
+  "source": "这款的产物根程序号和游戏库不一致（游戏库 {0}，组装结果 {0}）。",
+  "en": "Built root title ID does not match library (library {0}, assembled {0})."
+ },
+ {
+  "source": "组装期间游戏模块输入改变，本次没有发布或安装。请等待出包结束后重试。",
+  "en": "Game module input changed during assembly; did not publish or install. Retry after build finishes."
+ },
+ {
+  "source": "安装确认已失效或与当前设备／宿主不符，请重新检测并确认。",
+  "en": "Installation confirmation expired or does not match the current device/host; please inspect and confirm again."
+ },
+ {
+  "source": "手机上的 S2Arm 安装版本尚未核实；为避免旧宿主覆盖新版，本次没有安装或传输。请先同步宿主更新。",
+  "en": "Installed S2Arm version on iPhone has not been verified; skipped installation/transfer to avoid overwriting with an older host. Sync host updates first."
+ },
+ {
+  "source": "Mac 随包手机工具缺少版本查询能力或无法运行，请更新完整的 S2Arm；本次没有覆盖安装，不需要卸载手机 App。",
+  "en": "Bundled Mac mobile tool lacks version query capability or cannot run; please update full S2Arm. Did not overwrite or require uninstalling the phone app."
+ },
+ {
+  "source": "无法核实手机上的 App 版本，本次没有覆盖安装。请解锁手机并检查连接。",
+  "en": "Unable to verify installed app version on iPhone; did not overwrite. Unlock iPhone and check connection."
+ },
+ {
+  "source": "缺少经过校验的 iOS 宿主更新组件，本次没有覆盖安装。",
+  "en": "Missing verified iOS host update components; did not overwrite."
+ },
+ {
+  "source": "手机 App 需要加入此游戏模块或续签。推送资源不会覆盖安装；请先单独执行安装／更新／续签 App，再推送游戏。",
+  "en": "Phone app needs this game module added or renewed. Resource transfer will not overwrite the app; install/update/renew the app separately first, then push resources."
+ },
+ {
+  "source": "游戏模块输入不完整，不能跳过安装。",
+  "en": "Game module inputs are incomplete; cannot skip installation."
+ },
+ {
+  "source": "无法确认手机 App 是否已安装，本次未改动。",
+  "en": "Unable to confirm whether the phone app is installed; no changes made."
+ },
+ {
+  "source": "手机宿主不在此更新的升级链中，已阻止覆盖安装；不会把新版降回旧版。",
+  "en": "Phone host is not in this update's upgrade chain; blocked overwrite so a newer version is never downgraded."
+ },
+ {
+  "source": "无法核对游戏模块；本次没有重装 App 或传输资源。请先准备游戏，再单独安装／更新手机 App。",
+  "en": "Unable to verify game module; did not reinstall app or transfer resources. Prepare the game first, then install/update the phone app separately."
+ },
+ {
+  "source": "本次未安装：缺少可核对的游戏模块，请先准备 iPhone 版。",
+  "en": "Not installed: missing verifiable game module; prepare the iPhone build first."
+ },
+ {
+  "source": "准备资源期间手机 App 安装状态改变，已停止自动安装；请重新推送，或单独执行宿主更新。",
+  "en": "Phone app installation state changed while preparing resources; stopped automatic installation. Please push again or run a standalone host update."
+ },
+ {
+  "source": "安装后版本核对失败，尚未开始传输资源。",
+  "en": "Post-install version verification failed; resource transfer has not started."
+ },
+ {
+  "source": "签名期间手机上的 App 安装状态改变，本次没有覆盖安装。",
+  "en": "Phone app installation state changed during signing; did not overwrite."
+ },
+ {
+  "source": "无法完成安装前进程检查，本次未安装。",
+  "en": "Unable to complete pre-install process check; not installed."
+ },
+ {
+  "source": "游戏模块输入含链接，无法确认安装身份。",
+  "en": "Game module input contains links; cannot verify installation identity."
+ },
+ {
+  "source": "安装包缺少可核对的宿主或游戏模块身份，已阻止覆盖安装。",
+  "en": "Installer package lacks verifiable host or game module identity; overwrite blocked."
+ },
+ {
+  "source": "上传进度 (\\d+)/(\\d+) 字节",
+  "en": "Upload progress (\\d+)/(\\d+) bytes"
+ },
+ {
+  "source": "签名没成：",
+  "en": "Signing failed: "
+ },
+ {
+  "source": "本地容器记录落后于手机，且无法核实已安装模块 ",
+  "en": "Local container records trail the phone and cannot verify installed module "
+ },
+ {
+  "source": " 的原始输入；没有覆盖手机。请先恢复该模块对应的本地版本，不要盲目重打其它游戏。",
+  "en": " original inputs; did not overwrite phone. Restore the local version for that module first."
+ },
+ {
+  "source": "S2Arm 更新过，手机上的「",
+  "en": "S2Arm has updated, but \""
+ },
+ {
+  "source": "」还是旧版出的：同一个 App 里的游戏要同一版，先给它们各「打 iPhone 包」一次，再装这款（手机上现有的不受影响）。",
+  "en": "\" on iPhone was built with an older version: all games in one App must use the same version. Build an iPhone package for them first, then install this game."
+ },
+ {
+  "source": "地址空间类型不一致",
+  "en": "Address space types do not match"
  }
 ]

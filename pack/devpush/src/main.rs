@@ -76,6 +76,70 @@ fn progress() -> Progress<impl FnMut(u64)> {
     }
 }
 
+// Pure response projection: malformed installed entries are unknown, never
+// absence. Only installation identity fields may leave this tool.
+fn app_info_result(apps: &std::collections::HashMap<String, plist::Value>, bundle: &str)
+    -> Result<plist::Dictionary, String> {
+    let mut result = plist::Dictionary::new();
+    result.insert("installed".into(), apps.contains_key(bundle).into());
+    if let Some(value) = apps.get(bundle) {
+        let info = value.as_dictionary().ok_or("已安装 App 信息格式错误")?;
+        for key in ["CFBundleVersion", "Path"] {
+            let text = info.get(key).and_then(|v| v.as_string())
+                .filter(|s| !s.trim().is_empty() && !s.chars().any(|c| c.is_control()))
+                .ok_or("已安装 App 缺少有效版本或路径")?;
+            if key == "Path" && !text.starts_with('/') { return Err("已安装 App 路径无效".into()); }
+            result.insert(key.into(), text.into());
+        }
+        if let Some(text) = info.get("CFBundleShortVersionString").and_then(|v| v.as_string()) {
+            result.insert("CFBundleShortVersionString".into(), text.into());
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    use std::collections::HashMap;
+    fn installed() -> plist::Dictionary {
+        let mut d = plist::Dictionary::new();
+        d.insert("CFBundleVersion".into(), "1234.5.6".into());
+        d.insert("Path".into(), "/synthetic/App.app".into());
+        d.insert("AccountData".into(), "must-not-leave-tool".into());
+        d
+    }
+    #[test]
+    fn absence_requires_no_matching_entry() {
+        let apps = HashMap::from([("other".into(), plist::Value::Dictionary(installed()))]);
+        let r = app_info_result(&apps, "bundle").unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r["installed"].as_boolean(), Some(false));
+    }
+    #[test]
+    fn installed_identity_is_whitelisted() {
+        let apps = HashMap::from([("bundle".into(), plist::Value::Dictionary(installed()))]);
+        let r = app_info_result(&apps, "bundle").unwrap();
+        assert_eq!(r.len(), 3);
+        assert_eq!(r["installed"].as_boolean(), Some(true));
+        assert_eq!(r["CFBundleVersion"].as_string(), Some("1234.5.6"));
+        assert!(!r.contains_key("AccountData"));
+    }
+    #[test]
+    fn malformed_entry_is_not_absence() {
+        let apps = HashMap::from([("bundle".into(), plist::Value::String("bad".into()))]);
+        assert!(app_info_result(&apps, "bundle").is_err());
+        for key in ["CFBundleVersion", "Path"] {
+            for value in [None, Some(plist::Value::String("".into())), Some(plist::Value::Boolean(true))] {
+                let mut d = installed();
+                d.remove(key);
+                if let Some(v) = value { d.insert(key.into(), v); }
+                assert!(app_info_result(&HashMap::from([("bundle".into(), d.into())]), "bundle").is_err());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod progress_tests {
     use super::*;
@@ -201,7 +265,9 @@ async fn write_tar<W: AsyncWrite + Unpin, F: FnMut(u64)>(w: &mut W, list: &[Stri
     // 写缓冲 4 MB：AFC 每次 write 是一次往返，小文件每个要写头 / 内容 / 补齐三次（11-06 Windows 出包机原生 USB 推0100F2C0115B6000：第 1 批 15.4 万个文件平均 6 KB，
     //   本地打包 16.6 秒、经 USB 约 1100 秒，全包 30.5 万个文件 19.2 GB 用 2696 秒、平均 7.1 MB/s）。合并成大块再发；大于缓冲的写直接透传
     let mut w = tokio::io::BufWriter::with_capacity(4 << 20, w);
-    let mut total = 0u64; let mut payload = 0u64; let mut buf = vec![0u8; 1 << 20];
+    let mut progress_at = std::time::Instant::now();
+    let mut payload = 0u64;
+    let mut total = 0u64; let mut buf = vec![0u8; 1 << 20];
     for rel in list {
         let path = std::path::Path::new(root).join(rel);
         let mut f = tokio::fs::File::open(&path).await.map_err(|e| format!("读不了 {}：{e}", path.display()))?;
@@ -220,13 +286,59 @@ async fn write_tar<W: AsyncWrite + Unpin, F: FnMut(u64)>(w: &mut W, list: &[Stri
             left -= k as u64; total += k as u64;
             payload += k as u64;
             progress.report(&mut w, payload).await?;
+            if progress_at.elapsed().as_secs() >= 1 {
+                // Report after flushing to transport, not just the local buffer.
+                w.flush().await.map_err(|e| e.to_string())?;
+                eprintln!("S2A_UPLOAD_BYTES {payload}");
+                progress_at = std::time::Instant::now();
+            }
         }
         let pad = ((512 - size % 512) % 512) as usize;
         if pad > 0 { w.write_all(&vec![0u8; pad]).await.map_err(|e| e.to_string())?; total += pad as u64; }
     }
     w.write_all(&[0u8; 1024]).await.map_err(|e| format!("写归档尾失败：{e}"))?; total += 1024;
     w.flush().await.map_err(|e| e.to_string())?;
+    eprintln!("S2A_UPLOAD_BYTES {payload}");
     Ok(total)
+}
+
+// Resume only after comparing every byte already present with the deterministic
+// tar stream. No second archive, and a mismatched prefix is never overwritten.
+async fn resume_stream<R, W>(input: &mut R, output: &mut W) -> Result<u64, String>
+where R: AsyncRead + Unpin, W: AsyncRead + AsyncWrite + AsyncSeek + Unpin {
+    let existing = output.seek(std::io::SeekFrom::End(0)).await.map_err(|e| e.to_string())?;
+    output.seek(std::io::SeekFrom::Start(0)).await.map_err(|e| e.to_string())?;
+    let mut expected = vec![0u8; 1 << 20];
+    let mut actual = vec![0u8; 1 << 20];
+    let mut checked = 0u64;
+    while checked < existing {
+        let n = (existing - checked).min(expected.len() as u64) as usize;
+        input.read_exact(&mut expected[..n]).await.map_err(|_| "续传文件比目标归档更长，未改动已有文件".to_string())?;
+        output.read_exact(&mut actual[..n]).await.map_err(|e| e.to_string())?;
+        if expected[..n] != actual[..n] {
+            return Err("续传前缀校验失败，未改动已有文件".into());
+        }
+        checked += n as u64;
+        ALIVE.store(now_ms(), Ordering::Relaxed);
+    }
+    eprintln!("S2A_RESUME_BYTES {checked}");
+    let appended = tokio::io::copy(input, output).await.map_err(|e| e.to_string())?;
+    output.flush().await.map_err(|e| e.to_string())?;
+    Ok(existing + appended)
+}
+
+async fn resume_tar<W>(output: &mut W, list: Vec<String>, root: String) -> Result<u64, String>
+where W: AsyncRead + AsyncWrite + AsyncSeek + Unpin {
+    // Bounded pipe: generation cannot accumulate a second archive in RAM/disk.
+    let (mut reader, mut writer) = tokio::io::duplex(4 << 20);
+    let producer = tokio::spawn(async move { write_tar(&mut writer, &list, &root, &mut progress()).await });
+    let result = resume_stream(&mut reader, output).await;
+    drop(reader);
+    if result.is_err() { producer.abort(); }
+    let generated = producer.await;
+    let n = result?;
+    generated.map_err(|e| e.to_string())??;
+    Ok(n)
 }
 
 async fn tar_ok<R: AsyncRead + AsyncSeek + Unpin>(r: &mut R) -> Result<bool, String> {
@@ -246,6 +358,12 @@ async fn run(a: &[String]) -> Result<(), String> {
     if op == "tar-ok-local" {
         let mut f = tokio::fs::File::open(&a[4]).await.map_err(|e| format!("读不了 {}：{e}", a[4]))?;
         println!("{}", if tar_ok(&mut f).await? { "ok" } else { "bad" }); return Ok(());
+    }
+    if op == "resume-tar-local" {
+        let mut f = tokio::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(&a[6]).await.map_err(|e| e.to_string())?;
+        let n = resume_tar(&mut f, read_list(&a[4])?, a[5].clone()).await?;
+        println!("resume-tar-local {n} 字节"); return Ok(());
     }
     if op == "tar-local" {
         let mut f = tokio::fs::File::create(&a[6]).await.map_err(|e| format!("建不了 {}：{e}", a[6]))?;
@@ -296,6 +414,17 @@ async fn run(a: &[String]) -> Result<(), String> {
         let r = cd.invoke_with_plist("com.apple.coredevice.feature.launchapplication", req).await.map_err(|e| format!("起 {bundle} 失败：{e}"))?;
         let pid = r.as_dictionary().and_then(|d| d.get("processToken")).and_then(|t| t.as_dictionary()).and_then(|t| t.get("processIdentifier")).and_then(|p| p.as_signed_integer());
         println!("launch {bundle} pid {}", pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into()));
+        return Ok(());
+    }
+    if op == "app-info" {
+        // Read the installation service, not a receipt in Documents (which
+        // survives app replacement). Whitelist output: never dump account data.
+        let mut ip = idevice::installation_proxy::InstallationProxyClient::connect(&provider)
+            .await.map_err(|_| "读取已安装 App 信息失败".to_string())?;
+        let apps = ip.get_apps(Some("User"), Some(vec![bundle.clone()])).await
+            .map_err(|_| "读取已安装 App 信息失败".to_string())?;
+        let result = app_info_result(&apps, bundle)?;
+        plist::to_writer_xml(std::io::stdout(), &result).map_err(|_| "编码 App 信息失败".to_string())?;
         return Ok(());
     }
     if op == "uninstall" {   // 卸 App（连容器一起删）：免费开发者账号一台手机最多 3 个 App，测试台腾位用
@@ -390,13 +519,15 @@ async fn run(a: &[String]) -> Result<(), String> {
             tokio::fs::write(local, &buf[..got]).await.map_err(|e| e.to_string())?;
             println!("head {size}");
         }
-        "put-tar" => {
+        "put-tar" | "resume-tar" => {
             let (list, root, remote) = (read_list(&a[4])?, &a[5], a[6].trim_start_matches('/').to_string());
             let mut parts: Vec<&str> = remote.split('/').collect(); parts.pop();
             let mut cur = String::new();
             for p in parts { if p.is_empty() { continue; } cur = if cur.is_empty() { p.to_string() } else { format!("{cur}/{p}") }; let _ = afc.mk_dir(cur.clone()).await; }
-            let mut f = afc.open(remote.clone(), AfcFopenMode::WrOnly).await.map_err(|e| format!("打不开 {remote}：{e}"))?;
-            let n = write_tar(&mut f, &list, root, &mut progress()).await?;
+            let mode = if op == "resume-tar" { AfcFopenMode::Rw } else { AfcFopenMode::WrOnly };
+            let mut f = afc.open(remote.clone(), mode).await.map_err(|e| format!("打不开 {remote}：{e}"))?;
+            let n = if op == "resume-tar" { resume_tar(&mut f, list.clone(), root.clone()).await? }
+                    else { write_tar(&mut f, &list, root, &mut progress()).await? };
             println!("put-tar {} 个文件 {n} 字节 → {remote}", list.len());
         }
         "tar-ok" => {
@@ -498,6 +629,16 @@ async fn run(a: &[String]) -> Result<(), String> {
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]   // idevice AFC 内部用 block_in_place，单线程运行时会直接 panic
 async fn main() {
     let a: Vec<String> = std::env::args().collect();
+    // Offline handshake: packaging and workers must reject stale tools before
+    // connecting to a device. Keep this ahead of argument/device processing.
+    if a.len() == 2 && a[1] == "--capabilities" {
+        let mut result = plist::Dictionary::new();
+        result.insert("schema".into(), 1i64.into());
+        result.insert("operations".into(), plist::Value::Array(
+            ["app-info", "resume-tar"].iter().map(|s| plist::Value::String((*s).into())).collect()));
+        if plist::to_writer_xml(std::io::stdout(), &result).is_err() { std::process::exit(1); }
+        return;
+    }
     // launch 可以不带环境变量（多款容器推完拉起到游戏库，tools/push_pack.py Devpush.launch({})）：原先一律要 ≥ 5 个参数，这种调用只打用法、退 2，
     //   Windows 上「分开的文件」资源包推完永远拉不起 App（11-11 Windows 实机实测）
     if a.len() < 5 && !(a.len() == 4 && (a[3] == "launch" || a[3] == "find-s2arm" || a[3] == "devices")) { eprintln!("用法：s2a-devpush <udid> <包名> put <本地> <远端> | put-at <本地> <远端> <偏移> | head <远端> <字节数> <本地> | get <远端> <本地> | ls <目录> | du <目录>… | mv <远端> <远端> | mkdir <远端目录>"); std::process::exit(2); }

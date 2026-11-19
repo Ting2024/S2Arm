@@ -231,9 +231,12 @@ class FlowTests(unittest.TestCase):
                     Path(log).write_text("【红】" + ("iPhone 写不进资源包（Operation timed out; abandoned）。手机没有锁屏，是电脑和手机的连接出了问题：拔下数据线重新插好，再点一次。"
                                                     if locked == "conn" else "iPhone 写不进资源包：手机锁屏了。解锁手机、保持亮屏，再点一次。") + "\n", encoding="utf-8")
                     raise install.Failure("tool", code="tool_exit")
+                self.c.last_progress = 0
+                on_line("[12:00:00] 上传进度 3145728/3145728 字节")
                 on_line(f"[12:00:00] 资源包：推 {pushed} 个文件 3 MB，分 1 批 + 索引 + 清单（1 秒）")
                 if "--apply" in args and not (pushed == 0 and state["applied"] == "cafe01"):
                     launches.append({"S2A_PACK_APPLY_ONLY": "1"})
+                    self.c.last_progress = 0
                     on_line("[12:00:05] 机上解包 13/17")
                     if cant_open:
                         Path(log).parent.mkdir(parents=True, exist_ok=True)
@@ -322,6 +325,13 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(it["package"]["ok"]); self.assertEqual(r["ipaPath"], "/lib/downstream/x/a.ipa")
         with um.patch.object(downstream, "requested", return_value=scheme), um.patch.object(downstream, "last_record", return_value=None):
             self.assertFalse(self._ready([self._dev()])[1]["package"]["ok"])
+
+    def test_upload_progress_reaches_launcher(self):
+        gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
+        self._install(gid, pushed=2, applied_before="")
+        ev = [json.loads(l) for l in self.c.events.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertTrue(any(e["type"] == "progress" and e.get("unit") == "字节" and
+                            (e.get("done"), e.get("total")) == (3145728, 3145728) for e in ev))
 
     def test_install_signs_installs_and_pushes(self):
         gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)
@@ -2438,6 +2448,13 @@ class ShipExtContainerDropTests(unittest.TestCase):
         self.assertEqual((out / "Games" / B / "main.npdm").read_bytes(), B.encode() + bytes(16))
         # A 的目录已删
         self.assertFalse((out / "Games" / A).exists())
+
+    def test_drop_removes_module_identity_too(self):
+        A, B = "0100000000010000", "0100000000020000"
+        self._make_container([A, B])
+        (self.base / "s2a_game_inputs.json").write_text(json.dumps({A: "a" * 64, B: "b" * 64}))
+        out = self._drop(A)
+        self.assertEqual(json.loads((out / "s2a_game_inputs.json").read_text()), {B: "b" * 64})
 
     def test_drop_last_game_leaves_empty_container(self):
         """#227：摘最后一款不再拒，得到 0 款的容器（游戏库侧下次加款的底子），它的目录和镜像包都没了"""

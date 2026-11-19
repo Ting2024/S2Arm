@@ -1,6 +1,6 @@
 """推资源包（tools/push_pack.py，Mac / Windows 共用，11-06 两端合一）：假设备（内存里的 App 容器）上核口径。期望按文件头规则手写，不跑被测实现推导。
 Mac 的整条 dev_run 推包回归（假 devicectl）在 tests/dev_run_test.sh，本文件只核规则本身与 Windows 那支（原 tests/oneclick_win_test.py 推包几组搬来）"""
-import hashlib, json, os, struct, sys, tempfile, time, unittest
+import hashlib, io, json, os, struct, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -33,9 +33,10 @@ class Fake:
     def tar_ok(self, rel):
         v = self.files.get(rel, b""); return len(v) >= 1024 and len(v) % 512 == 0 and v[-1024:] == b"\0" * 1024
 
-    def put_tar(self, lst, root, rel):
+    def put_tar(self, lst, root, rel, resume=False):
         if self.full_disk: raise push.Fail("写不进去")
-        self.puts.append(rel); self.lists.append(Path(lst).read_text(encoding="utf-8").split()); self.files[rel] = WHOLE; return "stream"
+        self.puts.append(rel); self.resumes = getattr(self, "resumes", []) + [(rel, resume)]
+        self.lists.append(Path(lst).read_text(encoding="utf-8").split()); self.files[rel] = WHOLE; return "stream"
 
     def listing(self): return {k[len(RP) + 1:]: len(v) for k, v in self.files.items() if k.startswith(RP + "/")} if self.list_ok else None
 
@@ -123,11 +124,24 @@ class PlanRules(Base):
 
 
 class Pending(Base):
-    def test_cover_incomplete_keep_complete(self):   # 推到一半的盖成空包；推完整的留着；别的名字不碰
+    def test_cover_incomplete_retires_untrusted_complete(self):   # 废弃账时完整旧批也必须腾空，否则续传叠加一整份
         f = {f"{INC}/20261106061945_000.tar": b"x" * 700, f"{INC}/20261106061945_001.tar": WHOLE, f"{INC}/keep.tar": b"y", f"{INC}/note.txt": b"z"}
         self.go(f)
-        self.assertEqual(self.dev.files[f"{INC}/20261106061945_000.tar"], b"\0" * 1024); self.assertEqual(self.dev.files[f"{INC}/20261106061945_001.tar"], WHOLE)
+        self.assertEqual(self.dev.files[f"{INC}/20261106061945_000.tar"], b"\0" * 1024); self.assertEqual(self.dev.files[f"{INC}/20261106061945_001.tar"], b"\0" * 1024)
         self.assertEqual((self.dev.files[f"{INC}/keep.tar"], self.dev.files[f"{INC}/note.txt"]), (b"y", b"z"))
+
+    def test_full_retires_pending_before_repush(self):
+        self.go({f"{INC}/1_000.tar": WHOLE}, full=True)
+        self.assertEqual(self.dev.files[f"{INC}/1_000.tar"], b"\0" * 1024)
+
+    def test_missing_ledger_retires_pending(self):
+        self.go({f"{INC}/1_000.tar": WHOLE})
+        self.assertEqual(self.dev.files[f"{INC}/1_000.tar"], b"\0" * 1024)
+
+    def test_pending_listing_failure_stops_before_upload(self):
+        dev = Fake({}); dev.ls = lambda rel: None
+        with self.assertRaises(push.Fail): push.plan(dev, self.pk, self.w)
+        self.assertEqual(dev.puts, [])
 
     def test_pending_pushed_not_repushed(self):   # 出包重叠：早推的整批还没解 → .pushed 里的文件算已推，只推缺的
         f = {f"{INC}/20261106120000_000.tar": WHOLE, f"{RP}/.pushed": f"a\t{sha(b'A')}\n"}
@@ -144,6 +158,15 @@ class Pending(Base):
     def test_truncated_ignores_index_tsv(self):   # 上次收推送撞截短包：机上 index.tsv 是上次推的目标、文件没落地 → 不退回它，照推
         f = self.on_phone("a", "b", applied=False); f["Documents/unpack.log"] = "10-21 解包失败：解 1_001.tar（截短包，已删）返回 -4\n"
         self.go(f); self.assertEqual(self.dev.lists, [["a", "b"]])
+
+    def test_resumes_trailing_incomplete_batch_with_devpush(self):   # 有 s2a-devpush 时：前序完整批保留、末尾截断批原地续传，不盖掉前序完整批
+        f = {f"{INC}/20261106120000_000.tar": WHOLE, f"{INC}/20261106120000_001.tar": b"x" * 700, f"{RP}/.pushed": f"a\t{sha(b'A')}\n"}
+        self.dev = Fake(f); self.dev.kind = "devpush"
+        self.assertEqual(push.run(self.dev, self.pk, self.w, False, say=self.log.append)[:2], (1, 1))
+        self.assertEqual(self.dev.files[f"{INC}/20261106120000_000.tar"], WHOLE)
+        self.assertEqual(self.dev.lists, [["b"]])
+        self.assertEqual(self.dev.resumes, [(f"{INC}/20261106120000_001.tar", True)])
+        self.assertEqual(self.dev.files[f"{RP}/.pushed"].decode(), f"a\t{sha(b'A')}\nb\t{sha(b'BB')}\n")
 
 
 class SpotCheck(Base):
@@ -592,6 +615,31 @@ def localized(text):
         if m and all(g in exact or not re.search(r"[\u4e00-\u9fff]", g) or g.endswith(".img") for g in m.groups()):
             return True
     return False
+
+    def test_devicectl_ls_missing_subdirectory_falls_back_to_ancestor(self):
+        d = push.Devicectl("C891", "s2arm.z.games", self.w, env={})
+        calls = []
+        def fake_dcp(t, *args, log=None):
+            sub = args[args.index("--subdirectory") + 1]
+            calls.append(sub)
+            if sub == "Documents":
+                return 0, "games   Writable, Readable\n"
+            if sub == "Documents/games":
+                return 0, "0100F5201028E000   Writable, Readable\n"
+            return 1, "ERROR: Failed to retrieve list of files on the device. (com.apple.dt.CoreDevice.ActionError error 3.)\n"
+        d.dcp = fake_dcp
+        self.assertEqual(d.ls("Documents/games/0100F2C0115B6000/资源包/.incoming"), [])
+        self.assertEqual(calls, [
+            "Documents/games/0100F2C0115B6000/资源包/.incoming",
+            "Documents/games/0100F2C0115B6000/资源包",
+            "Documents/games/0100F2C0115B6000",
+            "Documents/games",
+        ])
+
+    def test_devicectl_ls_returns_none_when_documents_unreachable(self):
+        d = push.Devicectl("C891", "s2arm.z.games", self.w, env={})
+        d.dcp = lambda t, *args, log=None: (1, "ERROR: Failed to retrieve list of files on the device. (com.apple.dt.CoreDevice.ActionError error 3.)\n")
+        self.assertIsNone(d.ls("Documents/games/0100F2C0115B6000/资源包/.incoming"))
 
 
 class SpaceNeed(Base):
@@ -1142,6 +1190,47 @@ print(op + " 8 字节 → " + sys.argv[3])
         push.send(dev, self.pk, self.w, progress=lambda *a: calls.append(a))
         self.assertEqual(calls, [(0, 100, 0, 1), (40, 100, 0, 1), (100, 100, 1, 1)])
         self.assertIsNone(dev.dp.progress)
+
+
+class UploadProgress(Base):
+    def test_single_batch_emits_start_and_completion_bytes(self):
+        self.go({})
+        self.assertIn("上传进度 0/3 字节", self.log)
+        self.assertIn("上传进度 3/3 字节", self.log)
+
+    def test_counters_do_not_regress_or_exceed_payload(self):
+        dev = Fake({})
+        push.plan(dev, self.pk, self.w, say=self.log.append)
+        original = dev.put_tar
+        def sending(*args):
+            for n in [1, -1, 0, 2, 2, 900]: dev.upload_progress(n)
+            return original(*args)
+        dev.put_tar = sending
+        push.send(dev, self.pk, self.w, say=self.log.append)
+        counters = [int(line.split()[1].split('/')[0]) for line in self.log if line.startswith('上传进度 ')]
+        self.assertEqual(counters, [0, 1, 2, 3, 3])
+
+    def test_stream_counters_forwarded_and_pipe_closed(self):
+        dev = push.Devpush('fixture', 'private-device', 'private-bundle', self.w)
+        counters = []; dev.upload_progress = counters.append
+        child = mock.Mock(stdout=io.StringIO('S2A_UPLOAD_BYTES 1\nS2A_UPLOAD_BYTES 3\n'), returncode=0)
+        child.wait.return_value = 0
+        with mock.patch.object(push.subprocess, 'Popen', return_value=child):
+            self.assertEqual(dev.put_tar(self.w/'list', self.pk, 'remote'), 'stream')
+        self.assertEqual(counters, [1, 3])
+        self.assertTrue(child.stdout.closed)
+        self.assertNotIn('private-', (self.w/'devpush.log').read_text())
+
+    def test_interrupted_callback_stops_its_child(self):
+        dev = push.Devpush('fixture', 'device', 'bundle', self.w)
+        def cancel(_): raise KeyboardInterrupt()
+        dev.upload_progress = cancel
+        child = mock.Mock(stdout=io.StringIO('S2A_UPLOAD_BYTES 1\n'), returncode=-15)
+        with mock.patch.object(push.subprocess, 'Popen', return_value=child):
+            with self.assertRaises(KeyboardInterrupt): dev.put_tar(self.w/'list', self.pk, 'remote')
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=2)
+        self.assertTrue(child.stdout.closed)
 
 
 class GameImgZstd(Base):

@@ -65,7 +65,7 @@ enum ExportBlocker: Equatable {
 
 /// 正在跑 / 刚结束的一个作业（一局、出包、准备运行、装到 iPhone、导入、一键处理环境、换游戏库）。同一时刻只有一个（同旧启动器「执行位」互斥）。
 struct JobSession: Equatable {
-    enum Kind: String, CaseIterable { case play, export, prepare, install, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
+    enum Kind: String, CaseIterable { case play, export, prepare, install, installHost, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
                         keys, delete, diagnostics, moveGame, clearCache, installTV = "tvInstall", exportTV = "tvExport", pushSelected }
     enum Phase: Equatable { case running, stopping, finished(JobOutcome.State) }
     let kind: Kind
@@ -95,7 +95,7 @@ struct JobSession: Equatable {
     /// 走过的阶段（阶段事件的作业层原句，按出现顺序、不重复）：手机作业进行中页的步骤列表
     var stages: [String] = []
     /// 手机作业（装到手机 / 续签、删除、装回、更新手机上的 S2Arm）：结局页统一用 PhoneJobPanel
-    var isPhoneJob: Bool { [.install, .installRemove, .installRestore, .installUpdate, .pushSelected].contains(kind) }
+    var isPhoneJob: Bool { [.install, .installHost, .installRemove, .installRestore, .installUpdate, .pushSelected].contains(kind) }
 }
 
 /// 手机作业做完后结局页要说的事实（从作业结果读，不猜）：装到哪台、这次推了多少、哪几款被跳过
@@ -307,7 +307,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var phoneResult: (gameID: String, name: String, ok: Bool)?
     /// 控制口 /show install：打开这款的装机窗（同点顶栏「查看结果」/ 游戏的「装到 iPhone」）；界面接到后清空
     @Published var showInstallFor: String?
-    static let phoneKinds: Set<JobSession.Kind> = [.install, .installRemove, .installRestore]
+    static let phoneKinds: Set<JobSession.Kind> = [.install, .installHost, .installRemove, .installRestore]
     /// 连着的手机、可选机型（出包页用）；玩家选的机型（productType）。
     @Published private(set) var connectedDevices: [[String: Any]] = []
     @Published private(set) var targetModels: [[String: Any]] = []
@@ -1112,6 +1112,11 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    /// 能不能开始装：清单说可以，或这次清单读失败（不因探测失败把玩家关在外面，install 作业会给真实原因）。
+    func installAllowed(_ gameID: String) -> Bool {
+        installGameID == gameID && (installReadiness?.ready == true || (installReadiness == nil && installError != nil))
+    }
+
     /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
     func openSigningProject(completion: ((Error?) -> Void)? = nil) {
         Task {
@@ -1204,6 +1209,16 @@ public final class S2ArmLauncherModel: ObservableObject {
                                                 accept: accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device, export: export)
                 throw f
             }
+            return nil
+        }
+    }
+
+    func installHost(_ game: GameSummary, confirmation: String? = nil, device: String? = nil) {
+        guard !phoneBusy, !mainHolds(game.id), installAllowed(game.id) else { return }
+        failAction(nil, game: nil)
+        let device = device ?? installDeviceID
+        start(JobSession(kind: .installHost, gameID: game.id, name: game.name)) { [weak self] sink in
+            _ = try await self?.provider.installHost(gameId: game.id, confirmation: confirmation, device: device, events: sink)
             return nil
         }
     }
@@ -1697,7 +1712,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             setJob(slot, nil)
             inlineFailure = (state == .failed || state == .interrupted) ? (session.kind, session.message, session.suggestion) : nil
         }
-        if state == .completed && session.kind == .install { installDone = session.gameID }
+        if state == .completed && (session.kind == .install || session.kind == .installHost) { installDone = session.gameID }
         if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
         // 「导出自签包」点在没出过包的款上：出包没成（起不来 / 失败 / 取消）就没排进 installAfterQueue，标记清掉——
         //   否则这款以后正常出包会被画成导出、批量「更新并重新出」排进来的装机会误走导出
@@ -1752,7 +1767,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// 这个作业的进度留在原页（弹窗 / 欢迎页），不换到作业日志页。
     func isInline(_ s: JobSession) -> Bool {
-        [.keys, .importGames, .install, .installRemove, .installRestore, .delete, .clearCache, .diagnostics].contains(s.kind) || (showsWelcome && Self.repairKinds.contains(s.kind))
+        [.keys, .importGames, .install, .installHost, .installRemove, .installRestore, .delete, .clearCache, .diagnostics].contains(s.kind) || (showsWelcome && Self.repairKinds.contains(s.kind))
     }
 
     /// 欢迎页的「一键出包」：进和游戏库同一张出包页（维护者 11-11：首次出包缺设置项、选不了 iPhone / Mac），

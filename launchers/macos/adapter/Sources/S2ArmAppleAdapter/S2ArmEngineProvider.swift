@@ -345,6 +345,14 @@ public final class S2ArmEngineProvider: EngineProvider {
         try await installer.restorePrevious(device: device, events: events)
     }
 
+    public func previewHost(gameId: String, device: String? = nil) async throws -> HostInstallPreview {
+        try await installer.previewHost(gameId: gameId, device: device)
+    }
+
+    public func installHost(gameId: String, confirmation: String? = nil, device: String? = nil, events: EventSink = .discard) async throws -> InstallResult {
+        try await installer.installHost(gameId: gameId, confirmation: confirmation, device: device, events: events)
+    }
+
     public func removeFromPhone(gameId: String, acceptDropped: Bool = false, accept: Set<String> = [], device: String? = nil, events: EventSink = .discard) async throws -> RemoveResult {
         try await installer.remove(gameId: gameId, acceptDropped: acceptDropped, accept: accept, device: device, events: events)
     }

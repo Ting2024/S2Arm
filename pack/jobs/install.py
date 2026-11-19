@@ -245,6 +245,7 @@ def container_bundle_id(team, c=None):
 # 包名被别处占用（Apple 9401：玩家先用自己的签名工具签 S2Arm 时沿用了 io.s2arm.games.<团队> 这个包名，它就注册到了别的 Apple ID 下；
 #   之后 Mac 一键装按同一个包名向 Xcode 账号注册被拒——玩家改了签名里的包名才装上，11-11 反馈）：自动换成 <包名>.s2 再签一次，记在私有目录
 ALT_BUNDLE_SUFFIX = ".s2"
+CONTAINER_DIR = "container"
 
 
 def _bundle_switch_file(c):
@@ -619,11 +620,26 @@ def classify(text, default="signing_failed"):
 def ios_pack(c, gid):
     """这款的资源包（image/ios/.pack）；还没出 iPhone 版 / 没有资源包就不装、不报成功（审计 18:00 P1-58：原先照装、启动器写死「资源包也拷好了」，打开游戏才进缺资源页）"""
     if not layout.has_ios_kit(c, gid):
+        legacy = c.library / "iPhone" / gid.upper()
+        if (legacy / "S2Arm.ipa").is_file() and (legacy / "S2Arm.pack" / "manifest.json").is_file():
+            return legacy / "S2Arm.pack"
         raise Failure("这款游戏还没出 iPhone 包：先点「打 iPhone 包」。", code="job_failed")
     pack = layout.ios_pack(c, gid)
     if not (pack / "manifest.json").is_file():
         raise Failure(f"没找到这款的资源包（{pack}），没有装。请重新「打 iPhone 包」后再装。", code="pack_missing")
     return pack
+
+
+def latest_ipa(c, gid):
+    """兼容旧调用（返回 (ipa, pack)）：优先读 iPhone/<gid>/*.ipa + *资源包/.pack，否则用 v3 phone_ipa + ios_pack"""
+    legacy = c.library / "iPhone" / gid.upper()
+    if legacy.is_dir():
+        ipas = sorted(legacy.glob("*.ipa"), key=lambda p: p.stat().st_mtime, reverse=True)
+        packs = [p for p in sorted(legacy.iterdir()) if p.is_dir() and (p.name.endswith("资源包") or p.name.endswith(".pack") or (p / "manifest.json").is_file())]
+        if ipas and packs:
+            return ipas[0], packs[0]
+    pack = ios_pack(c, gid)
+    return layout.phone_ipa(c), pack
 
 
 def pack_id(pack):
@@ -684,6 +700,11 @@ def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None, pack_root=Non
             return
         m = re.search(r"推 (\d+) 个文件 (\d+) MB", text)  # 非玩家句
         if m: got.update(files=int(m.group(1)), mb=int(m.group(2)))
+        upload = re.search(r"上传进度 (\d+)/(\d+) 字节", text)
+        if upload:
+            done, total = map(int, upload.groups())
+            if 0 <= done <= total:
+                c.emit(message=f"上传游戏数据 {done / 1e9:.2f}/{total / 1e9:.2f} GB", done=done, total=total, unit="字节")
         m = re.search(r"机上解包 (\d+)/(\d+)", text)   # tools/push_pack.py apply 每解完一包打一行：启动器显示「机上解包 13/17」  # 非玩家句
         if m: c.emit(message=f"机上解包 {m.group(1)}/{m.group(2)}", done=int(m.group(1)), total=int(m.group(2)), unit="包")  # 非玩家句
     env = dict(c.env(), S2A_DEVICECTL=str(diag.COREDEVICE / "Resources/bin/devicectl"))
@@ -1886,7 +1907,8 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
     按各款文档根 Documents/games/<游戏号> 拉跑局知识与存档备份 → devicectl 覆盖装（不卸载，Documents 保留）"""
     ents = c.engine / "pack/app.entitlements"
     stage = Path(tempfile.mkdtemp(prefix="s2a-install-", dir=c.private))
-    log = c.logs / (c.task + "-install.log")
+    log = (getattr(c, "logs", None) or (c.private / "logs")) / (c.task + "-install.log")
+    log.parent.mkdir(parents=True, exist_ok=True)
     try:
         # ditto 解：保留可执行位与符号链接（zipfile 会丢，codesign / 安装都要）
         r = subprocess.run(["/usr/bin/ditto", "-x", "-k", str(ipa), str(stage)], capture_output=True, text=True)
@@ -1905,7 +1927,40 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
         widget = widget_prepare(c, app, bid, devcert=devcert.active(c))
         from diag import is_vision
         c.profile_picked = stage / "profile-picked.txt"   # dev_sign 记下这次用了哪份描述文件（手机拒了就挪开它重申）
-        if devcert.active(c):   # 玩家自己的开发者证书（v0.2.4）：rcodesign 直接读 p12 签，不申请描述文件、不要 Xcode 账号
+        host_only = getattr(c, 'operation', None) == 'installHost'
+        stamp = None
+        if host_only:
+            import mobile_lifecycle
+            stamp = mobile_lifecycle.stamp_install(c, app, udid, bid)
+            if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6)
+            try:
+                signing_due = getattr(c, '_host_signing_due', False)
+                min_hours = '144' if signing_due else '48'
+                env = dict(c.env(), S2A_PROFILE_NEED_UDIDS=udid or '', S2A_SIGN_PRIVATE='1', S2A_PROFILE_MIN_HOURS=min_hours)
+                prof_env = dict(c.env(), S2A_PROFILE_NEED_UDIDS=udid or '', S2A_PROFILE_MIN_HOURS=min_hours)
+                if signing_due:
+                    c.run(["bash", c.engine / "pack/ensure_profile.sh", bid, team["id"], ents] + ([udid] if udid else []), log, env=prof_env)
+                    if steps: c.begin("用你的 Apple ID 签名", 4, 6)
+                    c.run([sys.executable, c.engine / "pack/dev_sign.py", app, bid, team["id"], ents], log, env=env)
+                else:
+                    if steps: c.begin("用你的 Apple ID 签名", 4, 6)
+                    try:
+                        c.run([sys.executable, c.engine / "pack/dev_sign.py", app, bid, team["id"], ents], log, env=env)
+                    except Failure as sign_err:
+                        if sign_err.code != "tool_exit" or getattr(c, "last_rc", None) != 3:
+                            raise
+                        if getattr(c, "job", None) and c.job.get("diagnostics") and c.job["diagnostics"][-1].get("code") == "tool_exit":
+                            c.job["diagnostics"].pop()
+                        c.run(["bash", c.engine / "pack/ensure_profile.sh", bid, team["id"], ents] + ([udid] if udid else []), log, env=prof_env)
+                        c.run([sys.executable, c.engine / "pack/dev_sign.py", app, bid, team["id"], ents], log, env=env)
+            except Failure as e:
+                if e.code != "tool_exit":
+                    raise
+                from errors import recovery, tool_reason
+                text = log.read_text(errors="replace")[-8000:] if log.is_file() else ""
+                code = classify(text)
+                raise Failure("签名没成：" + tool_reason(log) + "；" + recovery(code, packaged=bool(c.r.get("engineBundle"))), code=code) from e
+        elif devcert.active(c):   # 玩家自己的开发者证书（v0.2.4）：rcodesign 直接读 p12 签，不申请描述文件、不要 Xcode 账号
             if steps: c.begin("用你的开发者证书签名", 4, 6)
             devcert.sign_app(c, app, log)
             devcert.export_ipa(c, stage / "Payload")
@@ -1915,8 +1970,11 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
         if steps: c.begin("装到 iPhone", 5, 6)
         from diag import devicectl
         for g in games:
-            pull_seen(c, dev["id"], bid, g, udid or dev["id"], docs=game_docs(g))
+            if not host_only:
+                pull_seen(c, dev["id"], bid, g, udid or dev["id"], docs=game_docs(g))
             backup_saves(c, dev["id"], bid, g, docs=game_docs(g))
+        if host_only:
+            mobile_lifecycle.before_install(c, udid, bid, dev["id"], stamp["expectedInstallation"])
         rc, _, err = devicectl(c, "device", "install", "app", "--device", dev["id"], str(app), timeout=1800)
         if rc and PROFILE_REJECTED in err and not devcert.active(c):
             # 11-17 #1447 / #1448：手机说这次签名用的描述文件不能用（0xe8008015）——本机核得出的几项都过了、手机仍不认（证书在别处被换掉 / 吊销、
@@ -1934,6 +1992,8 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
             code = classify(err, default="device_install_failed")
             reason = err.strip()[-2000:] or f"devicectl 退出 {rc}（未提供错误详情）"
             raise Failure("装不上 iPhone：" + reason, code=code)  # 非玩家句
+        if host_only:
+            mobile_lifecycle.finish_install(c, app, udid, bid, stamp)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -2229,6 +2289,10 @@ class MacPhone:
         if getattr(self.c, "trust_name", ""):
             self.info["trustName"] = self.c.trust_name   # 装机结果带上（**ph.info）：完成页写「点「<证书名>」→ 信任」
 
+    def transfer_plan(self, gid):
+        import mobile_lifecycle
+        return mobile_lifecycle.plan(self.c, gid, self.udid, self.bid)
+
     def before_push(self, packs):
         mbps = usb_mbps(self.udid, self.c.env())
         if 0 < mbps < 5000:   # 10-26 实测：两台测试设备经集线器只有 480 Mb/s，资源包约 31 MB/秒；USB 3 直插约 10 倍
@@ -2239,6 +2303,10 @@ class MacPhone:
                               "换 USB 3 能快约 10 倍（以后重装只推变了的文件）", code="usb_slow", severity="warning")
 
     def push(self, g, pack):
+        if "transfer_plan" in getattr(self, "__dict__", {}):
+            if self.transfer_plan(g) is None:
+                raise Failure("传输前手机 App 已不存在，本次停止；重新推送前请核对设备。", code="ios_host_unknown")
+            return push_pack(self.c, self.dev["id"], self.bid, pack, udid=self.udid, docs=game_docs(g), ctx=game_ctx(g))
         n0 = len(self.c.job["diagnostics"])
         r = push_pack(self.c, self.dev["id"], self.bid, pack, udid=self.udid, docs=game_docs(g), ctx=game_ctx(g), pack_root=pick_pack_root(self.c, self, g))
         with tempfile.TemporaryDirectory(dir=self.c.private) as w:
@@ -2585,7 +2653,8 @@ def phone_games(c, ph):
     container_others 据此不再带）。装着却列不出、或连装没装都判不了（锁屏 / 断开 / 工具原文认不出）：照装机原则（11-11「认不出的直接装」）
     按「这处没有别的游戏」继续，只记进日志——最坏是这台电脑不知道的别的款这次没带进容器，它们的资源包和存档还在手机上，回原电脑再装就回来"""
     bid = phone_bid(ph)
-    if not bid or not ph.udid:
+    udid = getattr(ph, "udid", None)
+    if not isinstance(bid, str) or not bid or not isinstance(udid, str) or not udid:
         return set()
     with tempfile.TemporaryDirectory(dir=c.private) as w:
         try:
@@ -2614,7 +2683,8 @@ def phone_removed(c, ph):
     """手机账本里玩家在手机上删掉的款（state = removed）→ 游戏号集合；读不到账本（旧 App 没写、进不了容器、格式不对）→ None，按现状组壳。
     只有手机写账本，电脑只读：电脑重新装上一款，手机见到它的资源包回来就自己改回 present"""
     bid = phone_bid(ph)
-    if not bid or not ph.udid:
+    udid = getattr(ph, "udid", None)
+    if not isinstance(bid, str) or not bid or not isinstance(udid, str) or not udid:
         return None
     with tempfile.TemporaryDirectory(dir=c.private) as w:
         try:
@@ -2734,6 +2804,35 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
     装上后记进 devices/<设备>.json，装机产物放默认位置根 S2Arm.ipa（换了壳的话原来那份留作 S2Arm.previous.ipa）。
     gid 为 None + others：不加新款，只把这几款换进本版壳（update_phone）"""
     import ipa as packer
+    gid = gid.upper() if gid else None
+    if gid and ("transfer_plan" in getattr(ph, "__dict__", {}) or (c.library / "iPhone" / gid / "S2Arm.ipa").is_file()):
+        latest_ipa(c, gid)
+        if steps: c.begin("把这款放进手机上的 S2Arm", 2, 6)
+        plan = ph.transfer_plan(gid) if callable(getattr(ph, "transfer_plan", None)) else None
+        installed = plan is None
+        if plan is not None:
+            ipa = latest_ipa(c, gid)[0]
+            games, fresh = plan["games"], plan["fresh"]
+            c.emit("message", "手机上的游戏模块未变：只传资源，不覆盖安装 App。")
+        else:
+            ipa, games, fresh = packer.assemble(c, gid, expected_games={})
+        packs = {g: latest_ipa(c, g)[1] for g in fresh}
+        if installed:
+            ph.install(ipa, games, steps=steps)
+        ph.before_push(packs)
+        if steps: c.begin("把资源包推进 iPhone 并解开（只推变了的文件；第一次大游戏要几分钟）", 6, 6)
+        files = size = 0
+        for g in fresh:
+            f, n = ph.push(g, packs[g])
+            files += f; size += n
+        if installed and "free" in ph.info:
+            exp = getattr(c, "_installed_expiry", 0)
+            at_ts = (exp - 7 * 86400) if exp > 0 else time.time()
+            for g in games:
+                record = contained(c.library, c.library / "games" / g / "ios-install.json")
+                record.parent.mkdir(parents=True, exist_ok=True)
+                atomic(record, dict(at=at_ts, free=bool(ph.info["free"]), device=ph.info["device"]))
+        return dict(outputPath=str(ipa.parent), bundleId=ph.bid, games=games, packFiles=files, packBytes=size, **ph.info)
     gid = gid.upper() if gid else None
     if gid: ios_pack(c, gid)   # 这款没有资源包就不组装、不装
     rec = layout.load_device(c, ph.key)
@@ -3719,6 +3818,93 @@ def _restore_previous(c):
     failed = sorted((set(rec.get("failedShells", [])) | ({dropped} if dropped else set())) - {old_sid})   # 装回的这一版不算「不好用」：连点两次 = 换回来，那一版照常能只换宿主
     layout.save_device(c, ph.key, dict(rec, games={g: rec["games"].get(g) or {} for g in games}, shellId=old_sid, failedShells=failed, bundleId=ph.bid or rec.get("bundleId", "")))
     return dict(games=games, bundleId=ph.bid, restoredShell=old_sid, **ph.info)
+
+
+def host_confirmation_binding(c, ph, plan):
+    import mobile_confirmation
+    return dict(device=ph.udid, bundle=ph.bid, game=c.r.get('gameId'),
+                expectedInstallation={k: plan['expectedInstallation'].get(k) for k in ('installed', 'CFBundleVersion', 'Path')},
+                host=plan['host'], gameIdentity=plan['gameIdentity'],
+                localModules=mobile_confirmation.local_modules(c))
+
+
+def preview_host(c):
+    import mobile_lifecycle as lifecycle
+    import mobile_confirmation
+    if os.name == 'nt': raise Failure('此独立宿主操作目前仅支持 Mac。', code='job_failed')
+    ph = phone_for(c)
+    plan = lifecycle.host_plan(c, c.r.get('gameId') or '', ph.udid, ph.bid, preview_unknown=True)
+    binding = host_confirmation_binding(c, ph, plan)
+    token = mobile_confirmation.issue(c, binding)
+    return dict(token=token, required=plan['required'], reasons=plan['reasons'],
+                unknownInstallation=plan['unknownInstallation'],
+                installedVersion=plan['expectedInstallation'].get('CFBundleVersion', ''),
+                games=binding['localModules']['games'])
+
+
+def install_host(c):
+    """Explicit Mac host update/renewal; NEVER sends or applies resources."""
+    if os.name == 'nt':
+        raise Failure('此独立宿主操作目前仅支持 Mac。', code='job_failed')
+    import mobile_lifecycle as lifecycle
+    import ipa as packer
+    gid = c.r.get('gameId') or ''
+    c.begin('核对手机宿主、游戏模块及签名期限', 1, 3)
+    ph = phone_for(c)
+    token = c.r.get('hostConfirmation')
+    plan = lifecycle.host_plan(c, gid, ph.udid, ph.bid, preview_unknown=bool(token))
+    if token:
+        import mobile_confirmation
+        confirmation_binding = host_confirmation_binding(c, ph, plan)
+        mobile_confirmation.consume(c, token, confirmation_binding)
+        if plan.get('unknownInstallation'):
+            c._host_replacement_admission = plan
+    elif plan.get('unknownInstallation'):
+        raise Failure('未知安装必须先预览并明确确认替换。', code='ios_host_unknown')
+    if not plan['required']:
+        return dict(installed=False, unchanged=True, reasons=[], packFiles=0, packBytes=0)
+    with tempfile.TemporaryDirectory(prefix='host-update-', dir=c.private) as td:
+        ipa, games, _ = packer.assemble(c, gid, dest=Path(td), expected_games=plan['expectedGames'])
+        app = Path(td) / 'S2Arm.app'
+        inputs = json.loads((app / 's2a_game_inputs.json').read_text())
+        expected = plan['expectedGames']
+        if token and (host_confirmation_binding(c, ph, plan) != confirmation_binding or not set(confirmation_binding['localModules']['games']).issubset(games)):
+            raise Failure('候选缺少确认时列出的游戏模块，已停止安装。', code='container_stale')
+        v3_lib = bool(getattr(c, 'library', None)) and not (c.library / 'iPhone/container/S2Arm.app').is_dir() and (c.library / '.s2arm-layout.json').is_file()
+        sid = packer.current_shell_id(c) if v3_lib else ''
+        def _valid_other(g, identity):
+            if inputs.get(g) == identity:
+                return True
+            if v3_lib:
+                r = packer.current_root(c, g, sid)
+                return r is not None and inputs.get(g) == lifecycle.input_identity(r, sid)
+            return False
+        if not set(expected).issubset(games) or any(
+                not _valid_other(g, identity) for g, identity in expected.items() if g != gid):
+            raise Failure('本次更新无法原样保留手机已有的其他游戏模块，已停止；不会用不完整容器覆盖。', code='container_stale')
+        if inputs.get(gid) != plan['gameIdentity'] or json.loads((app/'s2a_host.json').read_text())['id'] != plan['host']:
+            raise Failure('检测后宿主或游戏模块发生变化，请重新检测。', code='container_stale')
+        current = lifecycle.live_info(c, ph.udid, ph.bid)
+        if any(current.get(k) != plan['expectedInstallation'].get(k) for k in ('installed', 'CFBundleVersion', 'Path')):
+            raise Failure('检测期间手机安装已改变，本次未覆盖。', code='ios_host_unknown')
+        c.begin('仅安装／更新／续签 App，不传游戏资源', 2, 3)
+        c._host_signing_due = 'signingDue' in plan.get('reasons', [])
+        ph.install(ipa, games, steps=False)
+    if getattr(c, 'library', None) and "free" in ph.info:
+        exp = getattr(c, "_installed_expiry", 0)
+        at_ts = (exp - 7 * 86400) if exp > 0 else time.time()
+        if (c.library / ".s2arm-layout.json").is_file() and getattr(ph, "key", None):
+            rec = layout.load_device(c, ph.key)
+            layout.save_device(c, ph.key, dict(rec, games={g: (rec.get("games") or {}).get(g) or {} for g in games},
+                                               bundleId=ph.bid or rec.get("bundleId", ""),
+                                               signed=dict(at=at_ts, free=bool(ph.info["free"]), device=ph.info["device"])))
+        else:
+            for g in games:
+                record = contained(c.library, c.library / "games" / g / "ios-install.json")
+                record.parent.mkdir(parents=True, exist_ok=True)
+                atomic(record, dict(at=at_ts, free=bool(ph.info["free"]), device=ph.info["device"]))
+    return dict(installed=True, unchanged=False, reasons=plan['reasons'], games=games,
+                bundleId=ph.bid, packFiles=0, packBytes=0, **ph.info)
 
 
 def remove_from_phone(c):

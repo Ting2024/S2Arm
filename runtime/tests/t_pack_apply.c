@@ -304,7 +304,7 @@ int main(void) {
     // 已应用索引：解包成功时 index.tsv 整份存成 index.applied.tsv（执行器据它算补推）
     snprintf(c, sizeof c, "cmp -s %s/docs/资源包/index.tsv %s/docs/资源包/index.applied.tsv", T, T); CHECK(sh(c) == 0, "解包成功后 index.applied.tsv 应与 index.tsv 相同");
     // 截短包（推送中途被杀留下的）：① 截在条目边界——条目完整、只少了归档尾两块全零（旧代码当成解完）；② 截在条目中间。
-    //   期望：判失败「返回 -4」并注明「截短包：已删」，tar 已删、排在它后面的待解包与 .pushed 也删（执行器只按 index.applied.tsv 补推）；.applied / index.applied.tsv 不动（机上状态没变）
+    //   期望：判失败「返回 -4」并注明「截短包：已保留」，当前包、后续分卷与 .pushed 保留供续传；.applied / index.applied.tsv 不动（机上状态没变）
     for (int k = 0; k < 2; k++) {
         snprintf(c, sizeof c, "cd %s && rm -f docs/资源包/.incoming/*.tar docs/资源包/aoc && cp docs/资源包/index.applied.tsv ia.bak && cd src && "
             "COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../t.tar a.txt romfs && cd .. && "
@@ -312,11 +312,11 @@ int main(void) {
             "printf '{\"version\":2,\"index_sha256\":\"deadbeef02\"}' > docs/资源包/manifest.json", T, k == 0 ? "n - 1024" : "n / 2");
         CHECK(sh(c) == 0, "造截短包失败（%d）", k);
         CHECK(s2a_pack_apply(docs) != 0, "截短包应判失败（%s）", k == 0 ? "截在条目边界" : "截在条目中间");
-        snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '截短包：已删.*返回 -4'", T); CHECK(sh(c) == 0, "失败行应注明截短包已删、返回 -4（%d）", k);
+        snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '截短包：已保留.*返回 -4'", T); CHECK(sh(c) == 0, "失败行应注明截短包已保留、返回 -4（%d）", k);
         CHECK(!strcmp(s2a_pack_apply_code(), "ios_install_pack_truncated"), "截短包给码 ios_install_pack_truncated（%d，实际 %s）", k, s2a_pack_apply_code());
-        snprintf(d, sizeof d, "%s/docs/资源包/.incoming/4_000.tar", T); CHECK(stat(d, &st) != 0, "截短包应已删（%d）", k);
-        snprintf(d, sizeof d, "%s/docs/资源包/.incoming/4_001.tar", T); CHECK(stat(d, &st) != 0, "截短包后面的待解包也应删（%d）", k);
-        snprintf(d, sizeof d, "%s/docs/资源包/.pushed", T); CHECK(stat(d, &st) != 0, "推送记录 .pushed 应删（%d）", k);
+        snprintf(d, sizeof d, "%s/docs/资源包/.incoming/4_000.tar", T); CHECK(stat(d, &st) == 0, "截短包应保留（%d）", k);
+        snprintf(d, sizeof d, "%s/docs/资源包/.incoming/4_001.tar", T); CHECK(stat(d, &st) == 0, "截短包后面的待解包应保留（%d）", k);
+        snprintf(d, sizeof d, "%s/docs/资源包/.pushed", T); CHECK(stat(d, &st) == 0, "推送记录 .pushed 应保留（%d）", k);
         snprintf(c, sizeof c, "grep -qx deadbeef01 %s/docs/资源包/.applied && cmp -s %s/ia.bak %s/docs/资源包/index.applied.tsv", T, T, T); CHECK(sh(c) == 0, ".applied / index.applied.tsv 不应变（%d）", k);
     }
     // 核对机上实况（10-25 测试设备2：推了 4 批、解开 0 个包却记成已应用）：index.tsv 里有、没有任何推送包送来的文件。

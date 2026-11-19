@@ -9,13 +9,20 @@ DEST='generic/platform=iOS'; REG=(); [ -n "$UDID" ] && { DEST="${S2A_PROFILE_DES
 #   模板 = 同一份 xcodegen 规格（name Prov、iOS 17.0、application、UILaunchScreen、自动签名、CODE_SIGN_ENTITLEMENTS app.entitlements）生成的工程，包名 / 团队号留占位 S2ABID / S2ATEAM，这里替换
 # S2A_PROFILE_NEED_UDIDS（我方测试设备，pack/ipa_tail.py 给）：本包名的开发描述文件缺其中任一台 → 先移到 <产物根>/.stale_profiles/（不删），
 #   不移的话 Xcode 认旧的还有效、不重申（11-07 实测：io.s2arm-exp.d2r 旧 46 台，直接跑 7 秒没换；移走后重申得 61 台含 Duo）。重申按账号现有登记设备出，不用插手机
-if [ -n "${S2A_PROFILE_NEED_UDIDS:-}" ]; then
+if [ -n "${S2A_PROFILE_NEED_UDIDS:-}${S2A_PROFILE_MIN_HOURS:-}" ]; then
   SD=${S2A_ROOTS:-${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm/roots}/.stale_profiles
   IFS=: read -r -a PDS <<< "${S2A_PROFILE_DIRS:-$HOME/Library/MobileDevice/Provisioning Profiles:$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles}"
   for pd in "${PDS[@]}"; do for f in "$pd"/*.mobileprovision; do [ -f "$f" ] || continue
     x=$(security cms -D -i "$f" 2> /dev/null) || continue
     grep -qF "<string>${TEAM}.${BID}</string>" <<< "$x" || continue
-    for u in $S2A_PROFILE_NEED_UDIDS; do grep -qF "<string>$u</string>" <<< "$x" || { if mkdir -p "$SD" && mv "$f" "$SD/"; then echo "移走缺测试设备 $u 的旧描述文件 ${f##*/} → $SD"; else echo "【黄】移不走缺测试设备 $u 的旧描述文件 ${f}：Xcode 会认旧的不重申"; fi; break; }; done
+    if [ -n "${S2A_PROFILE_NEED_UDIDS:-}" ]; then
+      for u in $S2A_PROFILE_NEED_UDIDS; do grep -qF "<string>$u</string>" <<< "$x" || { if mkdir -p "$SD" && mv "$f" "$SD/"; then echo "移走缺测试设备 $u 的旧描述文件 ${f##*/} → $SD"; else echo "【黄】移不走缺测试设备 $u 的旧描述文件 ${f}：Xcode 会认旧的不重申"; fi; break; }; done
+      [ -f "$f" ] || continue
+    fi
+    if [ -n "${S2A_PROFILE_MIN_HOURS:-}" ]; then
+      python3 -c 'import datetime,plistlib,sys;d=plistlib.loads(sys.stdin.buffer.read());e=d.get("ExpirationDate");e=e.astimezone(datetime.timezone.utc).replace(tzinfo=None) if getattr(e,"tzinfo",None) else e;sys.exit(0 if not e or e>datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)+datetime.timedelta(hours=float(sys.argv[1])) else 1)' "$S2A_PROFILE_MIN_HOURS" <<< "$x" 2> /dev/null \
+        || { if mkdir -p "$SD" && mv "$f" "$SD/"; then echo "移走即将到期的旧描述文件 ${f##*/} → $SD"; else echo "【黄】移不走即将到期的旧描述文件 ${f}：Xcode 会认旧的不重申"; fi; }
+    fi
   done; done
 fi
 H=$(cd "$(dirname "$0")" && pwd); D=$(mktemp -d); trap 'rm -rf "$D"' EXIT; cp -R "$H/prov/" "$D/" && cp "$ENT" "$D/app.entitlements" || { echo "【红】拷不了描述文件申请工程模板（$H/prov）"; exit 1; }
