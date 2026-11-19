@@ -175,7 +175,12 @@ public final class S2ArmEngineProvider: EngineProvider {
         return r["message"] as? String ?? ""
     }
 
-    /// 删这款（delete 作业：IPA / 资源包 / 出包中间产物 / 缓存，存档与原始游戏文件保留）。
+    /// Explicit complete resource verification; separate from launching a game.
+    public func verifyGame(_ gameId: String, events: EventSink = .discard) async throws {
+        _ = try await client.perform("verify", extra: ["gameId": gameId], events: events)
+    }
+
+        /// 删这款（delete 作业：IPA / 资源包 / 出包中间产物 / 缓存，存档与原始游戏文件保留）。
     public func deleteGame(_ gameId: String, events: EventSink = .discard) async throws {
         _ = try await client.perform("delete", extra: ["gameId": gameId], events: events)
     }

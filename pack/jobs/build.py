@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import plistlib
 import shutil
@@ -34,10 +35,11 @@ def snapshot(c, root):
     """产物清单：每个文件的大小（v0.2.3 清理：原先逐个 sha256，几十 GB 的游戏资源要读一遍；校验一律只核大小，摘要没人用了。
     第二项留空串，旧清单的摘要照旧读得进来、不再比对）。软链由 clone_tree 拷的时候就拒了，这里不再重复"""
     result = {}
+    include_hash = not hasattr(c, "r")
     for p in sorted(root.rglob("*")):
         if p.is_file() and not layout.os_junk(p.name):   # 访达 .DS_Store / ._ 等系统文件不进清单：出包期间会被写入 / 改动 / 删掉（#382）
             c.check()
-            result[str(p.relative_to(root))] = [p.stat().st_size, ""]
+            result[str(p.relative_to(root))] = [p.stat().st_size, digest(p) if include_hash else ""]
     return result
 
 
@@ -51,9 +53,22 @@ def source_fingerprint(c):
     return None if c.r.get("engineBundle") else tree_hash(c.engine, ENGINE_SOURCES)
 
 
-def validate_files(c, root, files, full=False):
+def validate_file_manifest(files):
+    """Validate paths before any IO, including entries skipped during launch."""
     if not isinstance(files, dict) or not files:
         raise Failure("运行产物校验清单缺失。", code="runtime_invalid")
+    for name, entry in files.items():
+        if (not isinstance(name, str) or not name or "\\" in name or ":" in name or
+                any(ord(ch) < 32 for ch in name) or
+                any(part in ("", ".", "..") for part in name.split("/")) or
+                not isinstance(entry, list) or len(entry) != 2 or
+                type(entry[0]) is not int or entry[0] < 0 or
+                not isinstance(entry[1], str) or (entry[1] != "" and not re.fullmatch(r"[0-9a-f]{64}", entry[1]))):
+            raise Failure("运行产物校验清单无效。", code="runtime_invalid")
+
+
+def validate_files(c, root, files, full=False):
+    validate_file_manifest(files)
     # 判据同逐个 contained()：解析后在 root 里、本身是普通文件（不是软链）、大小对。所在目录只解析一次（11-07：运行包 6 万多个文件，
     #   逐个 realpath 要一百多万次 lstat，catalog 一次 9–15 秒）；文件本身 lstat 一次，不跟软链。
     root = resolve_path(root)
@@ -101,13 +116,18 @@ def has_runtime_romfs(root):
     return (std.is_file() and not std.is_symlink()) or (img.is_file() and not img.is_symlink())
 
 
-def validate_runtime(c, runtime, full=False, files=True, doubts=None):
+def validate_runtime(c, runtime, full=None, files=True, doubts=None):
     """doubts：起局传一个列表（11-17 维护者：校验不过不再拒起局）：清单的 schema / engine / target 对不上、主程序 / 程序描述缺或大小不符都记进去、照常返回，
     由起局黄字说明、照常起；不传照旧抛错（游戏库判「就绪」用）。files=False：只看清单和入口（游戏库列表用），不逐文件读状态，只核主程序 / main.npdm 在且大小对（QUICK_FILES，审计 P2-212：
     原先清单没变、主程序被删也报就绪，点开始才报错）。起局也用它（v0.3.1：原先每次起局逐个核约 6 万个文件，又慢、任何一个不对就不让玩）；
     其余文件真坏了，游戏会非正常退出，launch 那时再完整核一遍、说清缺了什么（missing_after_crash）"""
+    if full is None:
+        full = not hasattr(c, "r")
     root = resolve_path(runtime)
-    layout.require_in_location(c, root)
+    if hasattr(c, "r"):
+        layout.require_in_location(c, root)
+    else:
+        contained(c.library, root)
     manifest = read(root / "manifest.json", {})
     if manifest.get("schema") != 1 or manifest.get("engine") != "S2Arm" or manifest.get("target") != "macos-arm64":
         if doubts is None:
@@ -116,10 +136,18 @@ def validate_runtime(c, runtime, full=False, files=True, doubts=None):
         doubts.append(f"运行版本清单对不上（{got}）")
     if not has_runtime_romfs(root):
         raise Failure("运行包缺少独立的 RomFS 游戏资源目录，请重新准备。", code="runtime_invalid")
-    if files:
-        validate_files(c, root, manifest.get("files"), full)
-    elif isinstance(manifest.get("files"), dict):
-        quick = {k: manifest["files"][k] for k in QUICK_FILES if k in manifest["files"]}
+    manifest_files = manifest.get("files")
+    if full == "launch":
+        validate_file_manifest(manifest_files)
+        critical = {name: entry for name, entry in manifest_files.items()
+                    if name.split("/", 1)[0] not in ("romfs", "aoc", "systemdata")}
+        if "S2ArmGame.app/Contents/MacOS/s2arm-host" not in critical:
+            raise Failure("运行产物清单缺少宿主。", code="runtime_invalid")
+        validate_files(c, root, critical, full=True)
+    elif files:
+        validate_files(c, root, manifest_files, full)
+    elif isinstance(manifest_files, dict):
+        quick = {k: manifest_files[k] for k in QUICK_FILES if k in manifest_files}
         if quick:
             try:
                 validate_files(c, root, quick, full=False)
@@ -134,6 +162,19 @@ def validate_runtime(c, runtime, full=False, files=True, doubts=None):
             #   表坏了最多是布局提示归 0，不该挡起局；只记一笔
             print("[s2a] 内存配置表（addr_need.tsv）和清单记的不一致，照常起局（布局提示可能不生效）", file=sys.stderr)
     return manifest
+
+
+def verify_game(c):
+    """Explicit complete verification; no guest process or profile mutation."""
+    with c.lock("execution", shared=True), c.lock("game-" + c.game()["id"]):
+        game = c.game()
+        legacy = c.library / "games" / game["id"] / "current"
+        runtime = legacy.resolve() if legacy.exists() or legacy.is_symlink() else layout.image_mac(c, game["id"], create=False)
+        c.begin("完整验证游戏文件")
+        manifest = validate_runtime(c, runtime, full=True)
+        if manifest.get("gameId") != game["id"]:
+            raise Failure("运行资源与所选游戏不匹配。", code="runtime_invalid")
+        return dict(gameId=game["id"], verifiedFiles=len(manifest["files"]))
 
 
 def missing_after_crash(c, runtime, manifest):
@@ -311,7 +352,7 @@ def keep_runtime_nros(c, game_id, source):
 
 def launch(c):
     import sgrade
-    with c.lock("execution"), c.idle(sgrade.game_lock(c.r.get("gameId") or "")) as free:
+    with c.lock("execution", shared=True), c.lock("play"), c.lock("game-" + c.game()["id"]), c.idle(sgrade.game_lock(c.r.get("gameId") or "")) as free:
         if not free:   # 这款正在升级 S 级优化（sgrade.upgrade_game 拿着这款的锁）：只挡这一款，升级做完自动解除
             raise Failure("这款游戏正在升级 S 级优化，升级完成后就能开始。", code="sgrade_upgrading")
         game = c.game()
@@ -854,7 +895,7 @@ def prune_runtime_extras(root):
 
 
 def prepare(c):
-    with c.lock("execution"):
+    with c.lock("execution", shared=True), c.lock("build"), c.lock("game-" + c.game()["id"]):
         c.begin("检查游戏输入")
         c.require_source()
         game = c.game()

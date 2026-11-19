@@ -540,7 +540,7 @@ class ExecutionLockTests(unittest.TestCase):
                     with other.lock('execution'):
                         self.fail('concurrent library execution entered')
                 raise RuntimeError('synthetic build failure')
-            with patch.object(ipa, '_build', fail_while_locked):
+            with patch.object(ipa, '_build', fail_while_locked), patch.object(c, 'game', return_value={'id': 'fixture'}):
                 with self.assertRaisesRegex(RuntimeError, 'synthetic build failure'):
                     ipa.build(c)
             with other.lock('execution'):

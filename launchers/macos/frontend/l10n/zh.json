@@ -1774,5 +1774,8 @@
   "s2arm.env.widget.title": "装到 iPhone 时带主屏小组件",
   "s2arm.env.widget.detail": "iPhone 桌面上的游戏机样子小组件：显示最近玩的游戏和玩得最多的游戏，点封面直接开。用免费 Apple ID 时，每次新装会多用一个 App ID 名额（7 天 10 个）",
   "home.card.daysLeft": "还剩 %d 天",
-  "home.card.expired": "签名已过期"
+  "home.card.expired": "签名已过期",
+  "game.verify": "验证游戏文件",
+  "s2arm.job.title.verify": "正在验证游戏文件",
+  "s2arm.job.done.verify": "游戏文件验证完成"
 }

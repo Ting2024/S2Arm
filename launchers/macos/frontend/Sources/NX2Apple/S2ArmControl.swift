@@ -171,6 +171,11 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             model.deleteGame(g); return .ok()
+        case ("POST", "/verify"):
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            if let b = busy() { return b }
+            guard !model.isPlaying(gameID: g.id) else { return .bad("请先停止这款游戏再完整验证", code: 409) }
+            model.verifyGame(g); return .ok()
         case ("POST", "/launch"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -180,6 +185,8 @@ import S2ArmAppleAdapter
         case ("POST", "/cancel"):
             // 按任务号取消（启动器剃刀 M23）：原先不管传什么都停当前那个；任务号对不上回 409，不停错作业
             guard let id = str("taskId") else { return .bad("缺 taskId") }
+            if model.stopBackground(taskID: id) { return .ok() }
+            if let p = model.phoneSession, p.taskID == id { model.stopPhone(); return .ok() }
             guard model.busy else { return .bad("没有在跑的作业") }
             if model.phoneBusy, model.phoneSession?.taskID == id { model.stopPhone(); return .ok() }   // 手机槽的作业
             guard model.mainBusy, let current = model.session?.taskID, current == id else {
@@ -326,6 +333,7 @@ import S2ArmAppleAdapter
         ["POST /delete {gameId}", "删除这款游戏：IPA / 资源包 / 出包中间产物 / 缓存全删；存档与原始游戏文件保留"],
         ["POST /target {action:probe} | {productType, os}", "重新检测连接的设备 / 选出包提示用的机型和系统大版本"],
         ["POST /launch {gameId}", "在 Mac 上启动游戏"],
+        ["POST /verify {gameId}", "完整验证这款游戏的运行文件，不启动游戏"],
         ["POST /cancel {taskId} | /retry {taskId}", "停掉在跑的作业 / 重试出包、装机任务"],
         ["POST /environment", "重新检查环境"], ["POST /refresh", "刷新游戏库"],
         ["POST /diagnostics {action:pull} | {action:export, path} | {action:upload, gameId?} | {action:uploadSend|uploadCopy|uploadClose}", "拉回 iPhone 诊断 / 导出 Mac 诊断包 / 打开「上传给开发者」并替玩家点里面的按钮"],
@@ -371,7 +379,7 @@ import S2ArmAppleAdapter
                  "needsPreparation": g.needsPreparation, "needsKeys": g.needsKeys, "buildable": g.buildable, "missing": g.missing,
                  "baseBytes": g.packages.filter { $0.type == "base" }.reduce(Int64(0)) { $0 + $1.size }, "bytes": g.totalBytes] },
             "session": session, "busy": m.busy, "phoneSession": phoneSession, "mainBusy": m.mainBusy, "phoneBusy": m.phoneBusy,
-            "phoneQueue": m.phoneQueue.map { $0.gameID ?? "" },
+            "phoneQueue": m.phoneQueue.map { ["id": $0.id.uuidString, "kind": $0.kind.rawValue, "gameId": $0.game.id, "name": $0.game.name] as [String: Any] },
             "tasks": ControlJournal.tasks(privateRoot: privateRoot), "queue": [String](),
             "executionTask": m.busy ? (m.session?.taskID.map { $0 as Any } ?? NSNull()) : NSNull(),   // 在跑的作业层任务号（同旧前端 Store.executionTask），s2armctl next 据此判「本游戏正在运行」
             "notice": NSNull(),

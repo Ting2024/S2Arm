@@ -66,6 +66,9 @@ struct ExportSessionView: View {
                                 steps(at: timeline.date)
                             }
                         }
+                        if !model.exportQueue.isEmpty {
+                            ExportQueueListSection(model: model)
+                        }
                     } else {
                         results
                     }

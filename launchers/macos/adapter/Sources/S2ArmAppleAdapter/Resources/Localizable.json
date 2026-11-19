@@ -10326,5 +10326,17 @@
  {
   "source": "这次签好的 S2Arm 没带「提高内存上限」权限：装上后能玩，但大游戏可能内存不够、开局中止。",
   "en": "The S2Arm signed this time is missing the \"Increased Memory Limit\" entitlement: it installs and runs, but large games may run out of memory and stop at launch."
+ },
+ {
+  "source": "运行产物清单缺少宿主。",
+  "en": "The runtime artifact manifest is missing the host executable."
+ },
+ {
+  "source": "完整验证游戏文件",
+  "en": "Verify game files completely"
+ },
+ {
+  "source": "运行产物校验清单无效。",
+  "en": "The runtime artifact verification manifest is invalid."
  }
 ]

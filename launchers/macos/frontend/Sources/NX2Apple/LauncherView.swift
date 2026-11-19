@@ -74,6 +74,22 @@ struct LauncherView: View {
             noticeBar
             phoneUpdateBar
             libraryNoticeBar
+            if let play = model.playJob {
+                HStack {
+                    Image(systemName: "gamecontroller")
+                    Text(play.name).font(.manrope(13, .semibold))
+                    Text(loc.backend(play.stage)).font(.manrope(12)).foregroundStyle(.secondary)
+                    Spacer()
+                    if case .finished = play.phase {
+                        Text(loc.backend(play.message)).font(.manrope(12)).lineLimit(2)
+                        Button(loc.t("s2arm.play.back")) { model.dismissPlayJob() }
+                    } else {
+                        Button(loc.t("s2arm.play.stop")) { model.stopPlayJob() }
+                            .disabled(play.phase == .stopping)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 10)
+            }
             if model.batchShown {
                 BatchExportView(model: model, covers: covers, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
             } else if let result = model.viewingResult, let run = result.export {
@@ -620,6 +636,9 @@ struct LauncherView: View {
                         ProgressView().controlSize(.mini)
                         Text(txt(model.selfSigning && s.kind == .install ? "install.pill.exporting" : "install.pill.running").replacingOccurrences(of: "{0}", with: s.name).replacingOccurrences(of: "{1}", with: model.installTargetLabel)).font(.manrope(12.5, .semibold)).lineLimit(1)
                         if let f = s.progress.fraction { Text("\(Int(f * 100))%").font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary) }
+                        if !model.phoneQueue.isEmpty {
+                            Text(txt("export.pill.queue").replacingOccurrences(of: "{0}", with: "\(model.phoneQueue.count)")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")

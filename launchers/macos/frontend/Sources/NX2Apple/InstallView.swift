@@ -45,7 +45,14 @@ struct InstallView: View {
             } else if model.installDone == gameID { doneContent } else if let job = installJob {
                 VStack(alignment: .leading, spacing: 10) {
                     // 手机作业三态统一（PhoneJobPanel）：钥匙串提示只在后端标了 keychainPrompt 的阶段挂（#266），在组件里
-                    ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading)
+                            if !model.phoneQueue.isEmpty {
+                                PhoneQueueListSection(model: model)
+                            }
+                        }
+                    }
                     // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
                     HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background").controllerShortcut(.back) }
                 }
@@ -96,13 +103,16 @@ struct InstallView: View {
                         // 只换宿主后（手机上的 S2Arm 换了新版运行层）新版不好用：装回上一版
                         Button(text("install.restore")) { showRestoreConfirm = true }
                             .controllerButtonStyle(LauncherSecondaryButtonStyle())
-                            .disabled(queued)
+                            .disabled(model.phoneOperationBlocked(kind: .removeFromPhone, gameID: gameID) || queued)
                             .confirmationDialog(text("install.restore_title"), isPresented: $showRestoreConfirm, titleVisibility: .visible) {
                                 Button(text("install.restore_confirm")) { model.restorePhone(game) }
                                 Button(loc.t("launch.done"), role: .cancel) {}
                             } message: {
                                 Text(text("install.restore_body"))
                             }
+                    }
+                    if model.phoneBusy || !model.phoneQueue.isEmpty {
+                        PhoneQueueListSection(model: model)
                     }
                     if let game {
                         Button(text("install.remove")) { showRemoveConfirm = true }
@@ -189,8 +199,8 @@ struct InstallView: View {
     }
     /// 这一款在手机槽里跑着的装机 / 删除 / 装回（别款的手机作业不画进这款的窗）
     private var installJob: JobSession? {
-        guard let s = model.phoneSession, [.install, .installRemove, .installRestore].contains(s.kind), s.gameID == gameID else { return nil }
-        return s
+        if let p = model.phoneSession, p.gameID == gameID, [.install, .installRemove, .installRestore].contains(p.kind) { return p }
+        return (model.session?.gameID == gameID && [.install, .installRemove, .installRestore].contains(model.session!.kind)) ? model.session : nil
     }
     private var queued: Bool { model.phoneQueued(gameID) }
     private func text(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
@@ -247,5 +257,131 @@ struct InstallView: View {
         if !r.device.isEmpty { parts.append(String(format: loc.t("s2arm.install.device"), r.device)) }
         if !r.account.isEmpty { parts.append(String(format: loc.t("s2arm.install.account"), r.account)) }
         return parts.joined(separator: " · ")
+    }
+}
+
+struct PhoneQueueListSection: View {
+    @ObservedObject var model: S2ArmLauncherModel
+    @EnvironmentObject var loc: Localizer
+
+    private var zh: Bool { loc.lang == .zh }
+
+    private func kindLabel(_ kind: JobSession.Kind) -> String {
+        switch kind {
+        case .installRemove: return BackendText.launcherText("install.remove", language: zh ? "zh-Hans" : "en")
+        case .installRestore: return BackendText.launcherText("install.restore", language: zh ? "zh-Hans" : "en")
+        default: return BackendText.launcherText("install.pill.running", language: zh ? "zh-Hans" : "en").replacingOccurrences(of: "{0}", with: "").replacingOccurrences(of: "{1}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    var body: some View {
+        if model.phoneBusy || !model.phoneQueue.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(zh ? "推送 / 装机队列" : "Phone Queue")
+                        .font(.manrope(14, .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                VStack(spacing: 8) {
+                    if model.phoneBusy, let session = model.phoneSession {
+                        HStack(spacing: 12) {
+                            Image(systemName: "iphone")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20)
+                            Text("1")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.name)
+                                    .font(.manrope(13, .bold))
+                                    .lineLimit(1)
+                                Text(kindLabel(session.kind))
+                                    .font(.manrope(11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(zh ? "进行中" : "In Progress")
+                                .font(.manrope(11.5, .semibold))
+                                .foregroundStyle(LauncherPalette.building)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(LauncherPalette.building.opacity(0.14), in: Capsule())
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(LauncherPalette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(LauncherPalette.building.opacity(0.45), lineWidth: 1))
+                    }
+
+                    ForEach(Array(model.phoneQueue.enumerated()), id: \.element.id) { index, item in
+                        let displayIndex = model.phoneBusy ? index + 2 : index + 1
+                        HStack(spacing: 12) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("\(displayIndex)")
+                                .font(.mono(12, .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.game.name)
+                                    .font(.manrope(13, .semibold))
+                                    .lineLimit(1)
+                                Text(kindLabel(item.kind))
+                                    .font(.manrope(11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Button {
+                                    model.moveQueuedPhoneJob(fromIndex: index, toIndex: index - 1)
+                                } label: {
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == 0)
+                                .opacity(index == 0 ? 0.3 : 1)
+                                .help(zh ? "上移" : "Move Up")
+
+                                Button {
+                                    model.moveQueuedPhoneJob(fromIndex: index, toIndex: index + 1)
+                                } label: {
+                                    Image(systemName: "arrow.down")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == model.phoneQueue.count - 1)
+                                .opacity(index == model.phoneQueue.count - 1 ? 0.3 : 1)
+                                .help(zh ? "下移" : "Move Down")
+
+                                Button {
+                                    model.removeQueuedPhoneJob(id: item.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.white.opacity(0.08), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(zh ? "移出队列" : "Remove from Queue")
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(LauncherPalette.surface.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                    }
+                }
+            }
+        }
     }
 }

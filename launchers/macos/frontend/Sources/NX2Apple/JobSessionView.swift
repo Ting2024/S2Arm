@@ -128,6 +128,9 @@ struct JobSessionView: View {
             HStack(spacing: 14) {
                 Spacer(minLength: 0)
                 if finished == nil {
+                    Button { model.goToLibrary() } label: {
+                        Label(loc.t("s2arm.play.back"), systemImage: "chevron.left")
+                    }.buttonStyle(LauncherSecondaryButtonStyle())
                     Button { model.stop() } label: {
                         Label(loc.t(session.kind == .play ? "s2arm.play.stop" : "s2arm.job.cancel"), systemImage: "stop.fill")
                     }

@@ -328,7 +328,7 @@ extension LauncherView {
     }
     // 主按钮只在主槽有作业（出包 / 一局 / 导入…）时变成「回到当前任务」；手机作业在顶栏胶囊里看，不占主按钮
     private func homePrimarySymbol(_ game: GameSummary) -> String {
-        if model.mainBusy { return "arrow.up.forward.app" }
+        if model.mainBusy && (!game.playable || !model.canStartPlay(gameID: game.id)) { return "arrow.up.forward.app" }
         if game.playable { return model.cloudSyncing ? "arrow.triangle.2.circlepath" : "play.fill" }
         if game.iphoneReady { return "iphone.and.arrow.forward" }
         return "shippingbox"
@@ -336,7 +336,7 @@ extension LauncherView {
     func homePrimaryTitle(_ game: GameSummary) -> String {
         if model.sgradeQueued(game.id) { return txt("sgrade.upgrade.queued") }   // 排在队里还没轮到：写「排队中」，不冒充在升
         if model.sgradeUpgrading(game.id) { return Self.sgradeUpgradingTitle(model.sgradeProgress(game.id), txt) }   // 这款在升 S 级优化：按钮上直接写进度，不另弹框
-        if model.mainBusy { return loc.t("home.currentTask") }
+        if model.mainBusy && (!game.playable || !model.canStartPlay(gameID: game.id)) { return loc.t("home.currentTask") }
         if game.playable { return loc.t(model.cloudSyncing ? "s2arm.cloud.syncing" : "library.play") }
         if game.iphoneReady {
             return txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
@@ -350,7 +350,7 @@ extension LauncherView {
     }
     func homePrimary(_ game: GameSummary) {
         if model.sgradeUpgrading(game.id) { return }   // 升级中不能开这款
-        if model.mainBusy {
+        if model.mainBusy && (!game.playable || !model.canStartPlay(gameID: game.id)) {
             model.sessionHidden = false
             if model.batchRunning { model.batchShown = true }
             return

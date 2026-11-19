@@ -89,10 +89,17 @@ extension S2ArmLauncherModel {
         guard !consoleUpdating, let device = consolePhone?.device else { return }
         let order = games.filter { consoleSelection.contains($0.id.uppercased()) }.map { $0.id.uppercased() }
         guard resume || !order.isEmpty else { return }
-        guard !phoneBusy else { phoneQueue.append((nil, { [weak self] in self?.updateSelected(resume: resume) })); return }
+        let name = BackendText.launcherText("console.updateSelected", language: dynamicLanguage)
+            .replacingOccurrences(of: "{0}", with: "\(order.count)")
+        guard !phoneBusy else {
+            let dummy = GameSummary(id: "", name: name, compatibility: "playable")
+            phoneQueue.append(QueuedPhoneJob(kind: .pushSelected, game: dummy, customRun: { [weak self] in
+                self?.updateSelected(resume: resume)
+            }))
+            return
+        }
         consolePushing = nil
-        start(JobSession(kind: .pushSelected, gameID: nil, name: BackendText.launcherText("console.updateSelected", language: dynamicLanguage)
-            .replacingOccurrences(of: "{0}", with: "\(order.count)"))) { [weak self] sink in
+        start(JobSession(kind: .pushSelected, gameID: nil, name: name)) { [weak self] sink in
             let watch = EventSink { ev in
                 if let cur = ev.fields["current"] as? String { Task { @MainActor in self?.consolePushing = cur.uppercased() } }
                 sink.emit(ev)

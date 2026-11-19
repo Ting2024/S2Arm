@@ -204,8 +204,8 @@ def win_oneclick(c, oneclick, extraction, fonts, out, events, log, env, line, so
 
 
 def build(c):
-    # 与 Mac prepare、显式清缓存 / 删除共用执行锁，清理不与同库编库重叠。
-    with c.lock("execution"):
+    # 执行读锁允许其他游戏游玩；构建锁限制一个构建，同款互斥。清理 / 删除取执行写锁。
+    with c.lock("execution", shared=True), c.lock("build"), c.lock("game-" + c.game()["id"]):
         return _build(c)
 
 
