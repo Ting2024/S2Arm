@@ -16,3 +16,5 @@ int s2a_vpad_touch_user_chose(void);
 BOOL s2a_vpad_has_layouts(void);
 NSString *s2a_vpad_layout_name(void);
 UIViewController *s2a_vpad_layout_controller(void);
+void s2a_vpad_begin_editing(void);
+void s2a_vpad_read_slot_state(uint32_t *out_buttons, int32_t out_axes[4]);

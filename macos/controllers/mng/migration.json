@@ -1,0 +1,45 @@
+{
+  "source": "MacNativeGames/games/d3/runtime",
+  "files": {
+    "controller_assignment.h": "1023ced81ef2f259054ca62a0d839f439613dff1c4e3c7ce1b206e7b978d0740",
+    "controller_map.h": "a50e65781c01b3378b51750ed1a4c5e0711bb951210ee955627a56fe8bdaac69",
+    "controller_state.h": "a24e8ca0768d3ef1a3969f6b7267541031bcc359dbb4d705767ba638531f7d25",
+    "controller_topology.h": "0713249baeec1b1e9397cd9ec6ad9a2ee3b29082c24e9740906c2afb1e36ecf3",
+    "controller_slots.inc": "1bcdcc8a70172f902963c59256c42c73e97fcdf23ba9c9a3eb91d7575f37a838",
+    "controller_devices.inc": "1b0ab8cc478be8e98ab989ffc993a6342883cd07b0f77abd317b0866aa01a80d",
+    "gamepad_layout.h": "79e218b705edd51394d5255c399bde67832a51550f10c9bd1b1d3b0cddacb530",
+    "input_source.h": "fdd907790fcda1cc148d14b00f4c17893142eded6cf9e2bc6c8f27e1ae2f7245",
+    "input_source.inc": "0ca67b219c3eb2c4c2e8ffd9e78072d0f122933e09eabe99a3146d5a2b8f8165",
+    "stick_bindings.inc": "e226b277076d06faef6bc7ebf508f6b03d005f3c7d0bceb598a2ffac4446d33d",
+    "keyboard_map.h": "488fcb05992ef827e1398bd687b2f40e41d6b9bbadc52caf39d60a86d270e835",
+    "keyboard_macos.h": "e5d4b2aa642b14280516ab37429d11b5a050d14db29059ecf4cc8fedd85b5b9d",
+    "keyboard_ios.inc": "1c2610f0c4bb873b55cef8b8674cba8904f39f36b7a82fb751cdd4c6f5cbf0f9",
+    "keyboard_hid_macos.inc": "f9638d0d4a7408619896c50d31d3a868ea0f15a44734f53f1264cb3e2de1c386",
+    "input_diagram_macos.h": "29aa27966614a94ddc9e0ea69c6e9d584f957b2598fd7293bd6d623c38cf1317",
+    "input_settings_macos.inc": "58adb8286ea0490068ce5a261986efa9c9ea73b52ce960211935d41df09e993a",
+    "input_settings_shortcut_macos.h": "9325592131c2e07d0ae64f7b044a5a98a6069959b7c582b7ae04a22119b5c4d5",
+    "mouse_look.h": "297b578767fd6f010bc8b161a072005bde859390d98c0f61e4b40f60785afc79",
+    "gamepad.m": "13e134ac606a44550ccb7d97695ea330c6bbe9eb0c907fe7eeb3fd2a23c39b54",
+    "gamepad_feedback.m": "b2ba9bd3db7cae084b1b434474fe20861122b5492bd34ddae4c9d36cf81aa54d",
+    "motion_fusion.c": "26e404066f0743e4aad3f3eae4320cda7e937c19645cb4e30b77b4e42191b127",
+    "user_lock.h": "f5beca04bdfd9f288c407e21ebbc00e2db0a70809c8311867ef0c42b32642404",
+    "user_store.h": "9eafaa71e3f02552a87eb6040ca7c70898aa74cde4970830276924b014c6dc18",
+    "user_avatar.h": "837275e79ef57fedd72bdab73833167359d65d0467f01f04749c134c48ff5391",
+    "account_users.h": "c63049bfc5ee4eca7950fb92a481604026dae00a8a92c9c50bba432ae8392ce3",
+    "input.c": "1b743a179f8ea9928a2c6ba8831c112f514c7f21cf09b8f8686e2e32a08dc484"
+  },
+  "localAdaptations": {
+    "controller_slots.inc": {
+      "sha256": "85dd80677f9d6ccdb05dd3caf9f273094963b25a2e3be051f4929a989c6dd2f0",
+      "reason": "Keep third-party Pro selection per player; derive shared HID backend from all slots."
+    },
+    "input_settings_macos.inc": {
+      "sha256": "1dfee2c7a2958f5d96ab9b627875ece28ce5c2aee6fc64212bd91537234d47aa",
+      "reason": "Keep selected player when confirming third-party Pro; label player slots 1P–4P. Rename the user-visible compatibility mode to 北通宙斯NS模式. Check all player slots before changing bindings under the shared HID backend."
+    },
+    "gamepad.m": {
+      "sha256": "f24d3b0265d26978ee5352bfb92b547e618270d34194eb99652bcf69c21d9bd6",
+      "reason": "Start or stop the shared Pro HID backend when any player changes the effective backend, not only player one."
+    }
+  }
+}

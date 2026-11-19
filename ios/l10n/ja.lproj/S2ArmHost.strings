@@ -584,3 +584,4 @@
 "vpad.snap.saveChanged.title" = "保存した瞬間に戻りますか？";
 "vpad.snap.saveChanged.body" = "その後ゲームがセーブしています。戻るとゲームのセーブもその時点に戻ります。今のセーブは先にバックアップします。";
 "vpad.snap.saveChanged.go" = "戻る";
+"vpad.menu.pad14" = "コントローラー設定 (1P–4P)";

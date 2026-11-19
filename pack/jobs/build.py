@@ -195,6 +195,12 @@ def runtime_env(c, game, runtime, input_ok=True):
                S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))),
                # 资源替换类 mod（11-15）：这款游戏文件夹的 mods/（启动器「游戏设置 → Mod」导入），服务层 RomFsMods.cs 起局叠到 RomFS 上
                S2A_MODS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "mods"))))
+    from library import _mng_input_root
+    mng_root = _mng_input_root(c, game["id"])
+    mng_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(mng_root, 0o700)
+    env["S2A_MNG_INPUT_ROOT"] = str(mng_root.resolve())
+    env.setdefault("S2A_MAC_SLOT_HELD", "1")
     if player:
         env["S2A_PLAYER_USER"] = player["user"]
         if player.get("name"):
@@ -447,7 +453,7 @@ def compile_host(c, fingerprint, env, log_root):
         c.emit("cache", "已校验并复用 S2Arm Mac 宿主（含地址窗口护栏库）", cacheHit=True)
         ms.reuse(c, "host")
         return app
-    args = ["make", "-C", c.engine, "host", "S2A_CS=1", "S2A_MAC_FRONTEND=1",
+    args = ["make", "-C", c.engine, "host", "S2A_CS=1", "S2A_MAC_FRONTEND=1", "S2A_MNG_INPUT=1",
             "BUILD=" + str(host_root / "build"), "DEVELOPER_DIR=" + env["DEVELOPER_DIR"]]
     dav1d = os.environ.get("S2A_DAV1D")   # c.env() 会清掉 S2A_*；构建开关显式带给 make（缺省 1 不用带）
     if dav1d in ("0", "1"):

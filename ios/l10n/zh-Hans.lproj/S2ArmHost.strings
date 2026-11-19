@@ -590,3 +590,4 @@
 "vpad.snap.saveChanged.title" = "回到存下的那一刻？";
 "vpad.snap.saveChanged.body" = "存下那一刻之后游戏又存过档。回去会把游戏存档也退回那一刻；现在的存档会先备份。";
 "vpad.snap.saveChanged.go" = "回去";
+"vpad.menu.pad14" = "手柄设置 (1P–4P)";

@@ -9,11 +9,11 @@ let package = Package(
                // S2Arm × NX2Apple：NX2Apple 派生前端（launchers/macos/frontend）+ S2Arm 适配层（launchers/macos/adapter）。
                // 11-07 起是发版缺省（build_app.py / frontend_layout.py）；旧 S2ArmLauncher 留作回退（S2A_APP_FRONTEND=launcher）。
                .executable(name: "S2ArmApple", targets: ["S2ArmApple"])],
-    dependencies: [.package(path: "frontend"), .package(path: "adapter")],
+    dependencies: [.package(path: "frontend"), .package(path: "adapter"), .package(path: "../../macos/controllers")],
     targets: [
         // 作业层文字的翻译（BackendText：Localizable.json + 共享体验规格）在适配层，新旧前端共用一份
         .executableTarget(name: "S2ArmLauncher",
-                          dependencies: [.product(name: "S2ArmAppleAdapter", package: "adapter")],
+                          dependencies: [.product(name: "S2ArmAppleAdapter", package: "adapter"), .product(name: "S2ArmControllers", package: "controllers")],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(name: "S2ArmLauncherTests", dependencies: ["S2ArmLauncher"],
                     swiftSettings: [.swiftLanguageMode(.v5)]),

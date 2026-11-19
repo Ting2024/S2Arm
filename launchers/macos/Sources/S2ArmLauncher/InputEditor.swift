@@ -1,27 +1,30 @@
 // UI adapted from LumaDock (MIT); see ../../README.md.
 import SwiftUI
 import AppKit
-import GameController
+import S2ArmControllers
 
 @MainActor final class ControllerMonitor: ObservableObject {
     @Published var name = L("未连接手柄")
     @Published var value = L("等待输入")
-    var observers: [NSObjectProtocol] = []
-    init() {
-        for n in [NSNotification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] { observers.append(NotificationCenter.default.addObserver(forName:n,object:nil,queue:.main) { [weak self] _ in Task { @MainActor in self?.refresh() } }) }
-        refresh()
+    private let input = S2AControllerInput()
+    private var timer: Timer?
+    func start(_ selection: ControllerSelection?) {
+        timer?.invalidate()
+        let s = selection ?? ControllerSelection()
+        input.configureBackend(s.backend, device: s.device)
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let values = NSApp.isActive ? self.input.snapshot : [:]
+                self.name = self.input.status
+                self.value = values.keys.sorted().filter { values[$0]!.doubleValue != 0 }.map {
+                    "\($0): \(String(format: "%.2f", values[$0]!.doubleValue))"
+                }.joined(separator: " · ")
+            }
+        }
     }
-    func refresh() {
-        for c in GCController.controllers() {c.extendedGamepad?.valueChangedHandler=nil}
-        guard let c = GCController.controllers().first,let pad=c.extendedGamepad else {name=L("未连接手柄");value=L("所有输入已清空");return}
-        name=c.vendorName ?? L("已连接手柄")
-        pad.valueChangedHandler = { [weak self] p,_ in DispatchQueue.main.async {
-            guard let self else {return}
-            self.value=String(format:L("左摇杆 %.2f, %.2f · 右摇杆 %.2f, %.2f · L2 %.2f · R2 %.2f"),p.leftThumbstick.xAxis.value,p.leftThumbstick.yAxis.value,p.rightThumbstick.xAxis.value,p.rightThumbstick.yAxis.value,p.leftTrigger.value,p.rightTrigger.value)
-            if p.buttonA.isPressed {self.value += " · south"};if p.buttonB.isPressed{self.value += " · east"};if p.buttonX.isPressed{self.value += " · west"};if p.buttonY.isPressed{self.value += " · north"}
-        } }
-    }
-    deinit {for o in observers {NotificationCenter.default.removeObserver(o)}}
+    func stop() { timer?.invalidate(); timer = nil; input.stop() }
+    deinit { timer?.invalidate() }
 }
 struct InputEditor: View {
     @EnvironmentObject var store: Store
@@ -75,6 +78,11 @@ struct InputEditor: View {
             if let t=recording {if b.code != 53 {config.keyboard[t]=b};recording=nil}
             else {if b.code==53 {test=false;testText=L("输入测试已结束")} else {testText=L("键盘：\(keyName(b))")}}
         },onMouse:{v in testText=v}))
+        .onAppear { controller.start(config.controller) }
+        .onChange(of: config.controller) { _ in controller.start(config.controller) }
+        .onDisappear { controller.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in recording = nil; controller.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in controller.start(config.controller) }
     }
     var bindings: some View {
         HStack(alignment: .top, spacing: 18) {
@@ -237,9 +245,10 @@ struct EventRecorder: NSViewRepresentable {
     var recording: Bool; var test: Bool; var onKey: (KeyBinding)->Void; var onMouse: (String)->Void
     func makeCoordinator()->Coordinator { Coordinator(self) }
     func makeNSView(context:Context)->NSView {let v=NSView();context.coordinator.install(v);return v}
-    func updateNSView(_ view:NSView,context:Context) {context.coordinator.parent=self}
+    func updateNSView(_ view:NSView,context:Context) { if context.coordinator.parent.recording != recording { context.coordinator.pendingModifier = nil }; context.coordinator.parent=self }
     static func dismantleNSView(_ view:NSView,coordinator:Coordinator){coordinator.remove()}
     final class Coordinator {
+        var pendingModifier: Int?
         var parent:EventRecorder; var monitor:Any?; weak var view:NSView?
         init(_ p:EventRecorder){parent=p}
         func install(_ v:NSView){view=v;monitor=NSEvent.addLocalMonitorForEvents(matching:[.keyDown,.keyUp,.flagsChanged,.mouseMoved,.leftMouseDown,.rightMouseDown,.otherMouseDown]){[weak self] e in
@@ -248,8 +257,16 @@ struct EventRecorder: NSViewRepresentable {
             if e.type == .keyUp {if self.parent.test {self.parent.onMouse(L("键盘已松开：\(keyName(.init(code:Int(e.keyCode))))"))};return self.parent.recording ? nil : e}
             let code = [60:56,62:59,61:58][Int(e.keyCode)] ?? Int(e.keyCode)
             var mods=(e.modifierFlags.contains(.shift) ? 1 : 0)|(e.modifierFlags.contains(.control) ? 2 : 0)|(e.modifierFlags.contains(.option) ? 4 : 0)
-            if e.modifierFlags.contains(.command){return e}
-            if e.type == .flagsChanged {let bit=code==56 ? 1 : code==59 ? 2 : code==58 ? 4 : 0;if bit==0 || mods & bit == 0{if self.parent.test {self.parent.onMouse(L("修饰键已松开"))};return e};mods=0}
+            if e.modifierFlags.contains(.command) { self.pendingModifier = nil; return e }
+            if e.type == .keyDown && e.isARepeat { return nil }
+            if e.type == .flagsChanged {
+                let bit = code == 56 ? 1 : code == 59 ? 2 : code == 58 ? 4 : 0
+                if bit == 0 { return e }
+                if mods & bit != 0 { self.pendingModifier = code; return nil }
+                guard self.pendingModifier == code else { return e }
+                mods = 0
+            }
+            self.pendingModifier = nil
             self.parent.onKey(.init(code:code,modifiers:mods));return nil
         }}
         func remove(){if let monitor {NSEvent.removeMonitor(monitor)};monitor=nil}

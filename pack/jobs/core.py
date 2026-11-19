@@ -1052,7 +1052,7 @@ class Context:
     def env(self):
         env = dict(os.environ)
         for k in list(env):
-            if k.startswith(("S2A_", "NXGAL_", "DM_", "DMSH", "GAL_", "PSO_", "PYTHON")):
+            if k.startswith(("S2A_", "NXGAL_", "DM_", "DMSH", "GAL_", "PSO_", "PYTHON")) or k in ("TOTK_CONTROLS",):
                 env.pop(k)
         cache = self.work_root / "cache"
         cache.mkdir(parents=True, exist_ok=True)

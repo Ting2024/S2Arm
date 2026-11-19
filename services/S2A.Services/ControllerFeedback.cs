@@ -41,6 +41,7 @@ namespace S2A.Services
         // 按槽位震动（Mac 宿主 s2a_pad_set_rumble_slot，#520 E）：P1 以外的玩家各震各的手柄；没导出的宿主照旧只震 P1
         private readonly delegate* unmanaged<int, VibrationValue*, void> _setRumbleSlot;
         private readonly Dictionary<int, (VibrationValue Left, VibrationValue Right, long RenewAt)> _slotRumble = new();
+        private readonly delegate* unmanaged<ulong, uint, VibrationValue*, void> _setPlayerRumblePair;
         private readonly delegate* unmanaged<ulong, void> _stopRumble;
         private readonly delegate* unmanaged<ulong> _rumbleSession;
         private readonly delegate* unmanaged<MotionSample*, int> _readMotion;
@@ -58,8 +59,9 @@ namespace S2A.Services
         private PlayerIndex _rumblePlayer, _motionPlayer;
         private ulong _session;
         private ulong _motionSession, _motionTimestamp;
-        private long _renewAt;
-        private VibrationValue _left, _right;
+        private readonly VibrationValue[] _left = new VibrationValue[PlayerInput.PlayerCount];
+        private readonly VibrationValue[] _right = new VibrationValue[PlayerInput.PlayerCount];
+        private readonly long[] _renewAt = new long[PlayerInput.PlayerCount];
         private bool _motionEnabled, _motionPublished, _rumbleLogged, _motionLogged;
         private bool _rumblePermitted;
         private volatile bool _stopped;
@@ -83,6 +85,8 @@ namespace S2A.Services
             {
                 // A feedback-capable host must export the atomic pair ABI; never silently split a game frame.
                 _setRumblePair = (delegate* unmanaged<ulong, VibrationValue*, void>)(hooks.SetRumblePair != 0 ? hooks.SetRumblePair : NativeLibrary.GetExport(program, "s2a_pad_set_rumble_pair"));
+                if (NativeLibrary.TryGetExport(program, "s2a_pad_set_player_rumble_pair", out nint playerRumblePair))   // 平台例外：Mac / iOS 宿主（macos/front_mac.m、ios/vpad.m）可选的按玩家双频震动导出，安卓与无窗口宿主没有
+                    _setPlayerRumblePair = (delegate* unmanaged<ulong, uint, VibrationValue*, void>)playerRumblePair;
                 _stopRumble = (delegate* unmanaged<ulong, void>)(hooks.StopRumble != 0 ? hooks.StopRumble : NativeLibrary.GetExport(program, "s2a_pad_stop_rumble"));
                 _rumbleSession = (delegate* unmanaged<ulong>)rumbleSession;
                 if (NativeLibrary.TryGetExport(program, "s2a_pad_set_rumble_slot", out nint rumbleSlot))   // 平台例外：Mac / iOS 宿主（macos/front_mac.m、ios/slot_feedback.m）的可选导出
@@ -110,7 +114,7 @@ namespace S2A.Services
                 _readMousePair = (delegate* unmanaged<MouseSample*, int>)mousePair;
             if (NativeLibrary.TryGetExport(program, "s2a_pad_read_mouse_slot", out nint mouseSlot))   // 平台例外：同 s2a_pad_read_mouse_pair（Mac 宿主专有）
                 _readMouseSlot = (delegate* unmanaged<int, MouseSample*, int>)mouseSlot;
-            Console.Error.WriteLine($"[输入反馈] hooks rumble_pair={_setRumblePair != null} stop={_stopRumble != null} session={_rumbleSession != null} motion={_readMotion != null} motion_pair={_readMotionPair != null} motion_enable={_setMotionEnabled != null} mouse={_readMousePair != null} player={(int)player} session={_session} permit={_rumblePermitted}");
+            Console.Error.WriteLine($"[输入反馈] hooks rumble_pair={_setRumblePair != null} player_rumble_pair={_setPlayerRumblePair != null} stop={_stopRumble != null} session={_rumbleSession != null} motion={_readMotion != null} motion_pair={_readMotionPair != null} motion_enable={_setMotionEnabled != null} mouse={_readMousePair != null} player={(int)player} session={_session} permit={_rumblePermitted}");
         }
 
         public void Update(PlayerIndex player)
@@ -127,7 +131,9 @@ namespace S2A.Services
             {
                 Console.Error.WriteLine($"[输入反馈] state player={(int)_rumblePlayer} session={_session}->{session} permit={_rumblePermitted}");
                 _session = session;
-                _left = _right = default;
+                Array.Clear(_left);
+                Array.Clear(_right);
+                Array.Clear(_renewAt);
                 _slotRumble.Clear();
                 _rumbleLogged = false;
                 // A new session clears local state without truncating its connection cue.
@@ -142,7 +148,9 @@ namespace S2A.Services
                 if (_stopped) return;
                 if (_stopRumble != null) _stopRumble(_session);
                 _rumblePlayer = player;
-                _left = _right = default;
+                Array.Clear(_left);
+                Array.Clear(_right);
+                Array.Clear(_renewAt);
                 _slotRumble.Clear();
                 _rumbleLogged = false;
                 for (int i = 0; i < NpadDevices.MaxControllers; i++) _npads.ResetRumble((PlayerIndex)i);
@@ -155,9 +163,22 @@ namespace S2A.Services
             if (_stopped) return;
             ObserveSession();
             Console.Error.WriteLine($"[输入反馈] permit player={(int)_rumblePlayer} session={_session} permit={permitted}");
-            if (!permitted && (Vibrating(_left) || Vibrating(_right))) _stopRumble(_session);
-            _left = _right = default;
+            if (!permitted && AnyVibrating()) _stopRumble(_session);
+            Array.Clear(_left);
+            Array.Clear(_right);
+            Array.Clear(_renewAt);
             _rumblePermitted = permitted;
+        }
+
+        private int ResolveRumbleSlot(PlayerIndex player)
+        {
+            if (_setPlayerRumblePair != null)
+            {
+                if (player == PlayerIndex.Handheld) return 0;
+                int index = (int)player - (int)PlayerIndex.Player1;
+                return (uint)index < PlayerInput.PlayerCount ? index : -1;
+            }
+            return player == _rumblePlayer ? 0 : -1;
         }
 
         // Called synchronously for each permitted game request, before Npads' queue deduplication.
@@ -169,19 +190,20 @@ namespace S2A.Services
                 _rumbleLogged = true;
                 Console.Error.WriteLine($"[输入反馈] first game rumble slot={(int)player} player={(int)_rumblePlayer} session={_session} permit={_rumblePermitted} L={left.AmplitudeLow}@{left.FrequencyLow}/{left.AmplitudeHigh}@{left.FrequencyHigh} R={right.AmplitudeLow}@{right.FrequencyLow}/{right.AmplitudeHigh}@{right.FrequencyHigh}");
             }
-            if (player != _rumblePlayer)
+            if (_setPlayerRumblePair == null && player != _rumblePlayer)
             {
                 SlotRumble(player, left, right);
                 return;
             }
-            if (_session == 0 || !_rumblePermitted) return;
-            if ((left != _left || right != _right) &&
-                (Vibrating(left) || Vibrating(right) || Vibrating(_left) || Vibrating(_right)))
+            int slot = ResolveRumbleSlot(player);
+            if (slot < 0 || _session == 0 || !_rumblePermitted) return;
+            if ((left != _left[slot] || right != _right[slot]) &&
+                (Vibrating(left) || Vibrating(right) || Vibrating(_left[slot]) || Vibrating(_right[slot])))
             {
-                SendPair(left, right);
-                _left = left;
-                _right = right;
-                _renewAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 4;
+                SendPair((uint)slot, left, right);
+                _left[slot] = left;
+                _right[slot] = right;
+                _renewAt[slot] = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 4;
             }
         }
 
@@ -224,21 +246,33 @@ namespace S2A.Services
                 // SetPrimary supplies the authoritative player under this lock; an older HID snapshot cannot undo it.
                 ObserveSession();
                 long now = Stopwatch.GetTimestamp();
-                if (_session != 0 && _rumblePermitted && now >= _renewAt && (Vibrating(_left) || Vibrating(_right)))
+                if (_session == 0 || !_rumblePermitted) return;
+                int count = _setPlayerRumblePair != null ? PlayerInput.PlayerCount : 1;
+                for (int slot = 0; slot < count; slot++)
                 {
-                    SendPair(_left, _right);
-                    _renewAt = now + Stopwatch.Frequency / 4;
+                    if (now >= _renewAt[slot] && (Vibrating(_left[slot]) || Vibrating(_right[slot])))
+                    {
+                        SendPair((uint)slot, _left[slot], _right[slot]);
+                        _renewAt[slot] = now + Stopwatch.Frequency / 4;
+                    }
                 }
             }
         }
 
+        private bool AnyVibrating()
+        {
+            for (int i = 0; i < PlayerInput.PlayerCount; i++)
+                if (Vibrating(_left[i]) || Vibrating(_right[i])) return true;
+            return false;
+        }
         private static bool Vibrating(VibrationValue value) => value.AmplitudeLow > 0 || value.AmplitudeHigh > 0;
-        private void SendPair(VibrationValue left, VibrationValue right)
+        private void SendPair(uint slot, VibrationValue left, VibrationValue right)
         {
             VibrationValue* values = stackalloc VibrationValue[2];
             values[0] = left;
             values[1] = right;
-            _setRumblePair(_session, values);
+            if (_setPlayerRumblePair != null) _setPlayerRumblePair(_session, slot, values);
+            else _setRumblePair(_session, values);
         }
 
         // Only the HID thread calls this; event wakes and heartbeats may share a native sample.
@@ -428,7 +462,9 @@ namespace S2A.Services
                     _npads.RumblePermissionChanged = null;
                     _stopRumble(_session);
                 }
-                _left = _right = default;
+                Array.Clear(_left);
+                Array.Clear(_right);
+                Array.Clear(_renewAt);
                 for (int i = 0; i < NpadDevices.MaxControllers; i++) _npads.ResetRumble((PlayerIndex)i);
             }
             // Jcms 与样式里的 Joy-Con 2 位都留着：反馈对象随焦点 / 会话重建，手柄本身没换。原先这里写「未连接」，

@@ -43,6 +43,7 @@ void nxgal_window_set_layer(void *layer) {
 void nxgal_window_set_size(int32_t w, int32_t h) { width = w; height = h; }
 static int fit_w, fit_h;
 int s2a_screen_fit(int pw, int ph) { fit_w = pw; fit_h = ph; return 0; }   // 宽屏跟窗口比例（runtime/src/widen.c）：只记前端交出的像素尺寸
+uint64_t s2a_ap_frames(void) { return 0; }
 int s2a_hud_on(void) { return 0; }   // 开发浮层（runtime/src/hud.c）在这里不测，关着
 int s2a_hud_text(char *out, size_t n, const s2a_hud_host *h) { (void)h; return snprintf(out, n, "%s", ""); }
 // 存档原子提交判定（runtime/src/direct_prompt.c s2a_save_atomic_poll，判定本身由 runtime/tests/t_direct_prompt.c 测）：这里只给读数，测 Mac 横幅接线
@@ -59,6 +60,102 @@ int s2a_widen_full(void) { return fake_widen_full; }
 int s2a_screen_w(void) { return fake_screen_w; }
 int s2a_screen_h(void) { return fake_screen_h; }
 static void expect(int ok, const char *what) { if (!ok) { fprintf(stderr, "FAIL: %s\n", what); exit(1); } }
+// Synthetic controller: no IOHID manager, hardware commands or user files.
+@interface MotionFixture : S2AControllerInput
+@property S2AControllerMotion sample;
+@property BOOL available;
+@property BOOL disableDuringRead;
+@end
+@implementation MotionFixture
+- (NSDictionary *)snapshot { return @{}; }
+- (BOOL)readMotion:(S2AControllerMotion *)sample {
+    if (self.disableDuringRead) s2a_pad_set_motion_enabled(0);
+    *sample = self.sample;
+    return self.available && self.motionEnabled;
+}
+@end
+static void test_motion_bridge(void) {
+    MotionFixture *fixture = [MotionFixture new];
+    controller_input = fixture;
+    config = default_config(); focused = YES;
+    fixture.sample = (S2AControllerMotion){motion_now_us(), {1, -2, 3}, {4, -5, 6}};
+    fixture.available = YES;
+    s2a_pad_motion sample;
+    s2a_pad_set_motion_enabled(0); sample_input();
+    expect(!s2a_pad_read_motion(&sample), "motion opt-in required");
+    s2a_pad_set_motion_enabled(1); sample_input();
+    expect(s2a_pad_read_motion(&sample), "requested fresh motion reaches game ABI");
+    expect(sample.acceleration_x == 1 && sample.acceleration_y == -2 && sample.acceleration_z == 3 &&
+           sample.gyro_x == 4 && sample.gyro_y == -5 && sample.gyro_z == 6, "all six raw axes preserved");
+    uint64_t timestamp = sample.host_timestamp_us;
+    sample_input(); s2a_pad_read_motion(&sample);
+    expect(sample.host_timestamp_us == timestamp, "polling does not invent a new sensor sample");
+    // A disable/enable pair between two main-thread polls must still invalidate
+    // the driver's cached sample (a rapid in-process game restart).
+    s2a_pad_set_motion_enabled(0); s2a_pad_set_motion_enabled(1);
+    expect(!s2a_pad_read_motion(&sample), "new motion generation cannot replay published data");
+    fixture.sample = (S2AControllerMotion){motion_now_us() - 300000, {1,2,3}, {4,5,6}};
+    sample_input(); expect(!s2a_pad_read_motion(&sample) && !sample.host_timestamp_us, "old motion rejected and output cleared");
+    fixture.sample = (S2AControllerMotion){motion_now_us() + 1000000, {1,2,3}, {4,5,6}};
+    sample_input(); expect(!s2a_pad_read_motion(&sample), "future timestamps rejected");
+    fixture.sample = (S2AControllerMotion){motion_now_us(), {1,2,3}, {4,5,6}};
+    sample_input(); focused = NO; unsetenv("S2A_FOCUS_PAUSE"); reset_desktop_input(); sample_input();
+    expect(!s2a_pad_read_motion(&sample) && !fixture.motionEnabled, "focus loss mutes controller motion when pause-unfocused is enabled");
+    setenv("S2A_FOCUS_PAUSE", "0", 1); sample_input();
+    expect(s2a_pad_read_motion(&sample) && fixture.motionEnabled, "focus loss preserves assigned controller motion when S2A_FOCUS_PAUSE=0");
+    unsetenv("S2A_FOCUS_PAUSE");
+    focused = YES; fixture.available = NO; sample_input();
+    expect(!s2a_pad_read_motion(&sample), "disconnect cannot replay last sample");
+    fixture.available = YES; fixture.disableDuringRead = YES;
+    sample_input(); expect(!s2a_pad_read_motion(&sample), "HID disable racing main publication wins");
+    expect(!s2a_pad_read_motion(NULL), "null output safe");
+    controller_input = nil; s2a_pad_set_motion_enabled(0); reset_input();
+}
+// Real system-motion callback -> production sampler -> exported host motion ABI.
+@interface S2AControllerInput (SystemBridgeFixture)
+- (void)updateSystemMotion:(GCMotion *)motion;
+@end
+@interface BridgeSensor : NSObject
+@property GCAcceleration acceleration;
+@property GCRotationRate rotationRate;
+@property BOOL hasRotationRate, sensorsActive, sensorsRequireManualActivation;
+@property(copy) GCMotionValueChangedHandler valueChangedHandler;
+@end
+@implementation BridgeSensor
+@end
+@interface SystemBridgeInput : S2AControllerInput
+@property(strong) BridgeSensor *sensor;
+@end
+@implementation SystemBridgeInput
+- (NSDictionary *)snapshot { [self updateSystemMotion:(GCMotion *)self.sensor]; return @{}; }
+@end
+static void test_system_motion_bridge(void) {
+    SystemBridgeInput *input = [SystemBridgeInput new];
+    BridgeSensor *sensor = [BridgeSensor new]; input.sensor = sensor;
+    sensor.hasRotationRate = sensor.sensorsRequireManualActivation = YES;
+    sensor.acceleration = (GCAcceleration){1, -2, -1};
+    sensor.rotationRate = (GCRotationRate){M_PI, -M_PI/2, 0};
+    controller_input = input; config = default_config(); focused = YES;
+    s2a_pad_motion sample;
+    s2a_pad_set_motion_enabled(1); sample_input();
+    expect(sensor.sensorsActive && sensor.valueChangedHandler, "production sample loop enables requested system sensor");
+    expect(!s2a_pad_read_motion(&sample), "no cached system sample invented at enable");
+    sensor.valueChangedHandler((GCMotion *)sensor); sample_input();
+    expect(s2a_pad_read_motion(&sample), "actual system motion reader reaches exported host ABI");
+    expect(sample.acceleration_x == -1 && sample.acceleration_y == 2 && sample.acceleration_z == 1 &&
+           fabsf(sample.gyro_x - 180) < .001 && fabsf(sample.gyro_y + 90) < .001, "production bridge preserves normalized system sensor axes");
+    GCMotionValueChangedHandler old = sensor.valueChangedHandler;
+    s2a_pad_set_motion_enabled(0); s2a_pad_set_motion_enabled(1); sample_input();
+    old((GCMotion *)sensor); sample_input();
+    expect(!s2a_pad_read_motion(&sample), "restart cannot replay old system callback");
+    sensor.valueChangedHandler((GCMotion *)sensor); sample_input();
+    expect(s2a_pad_read_motion(&sample), "new-generation system callback reaches host");
+    focused = NO; reset_input();
+    expect(!s2a_pad_read_motion(&sample) && !sensor.sensorsActive && !sensor.valueChangedHandler, "focus loss closes system sensor and exported state");
+    old((GCMotion *)sensor);
+    expect(!s2a_pad_read_motion(&sample), "late system callback cannot restore focus-lost input");
+    focused = YES; s2a_pad_set_motion_enabled(0); [input stop]; controller_input = nil; reset_input();
+}
 static NSEvent *key_event(NSEventType type, unsigned short code, BOOL repeat) {
     return [NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:0 timestamp:0
         windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:repeat keyCode:code];
@@ -159,26 +256,65 @@ static void test_lan_warning(void) {
     expect([lan_warning() isEqualToString:missing], "missing discovery wins over a later start failure");
     puts("Mac LAN: unavailable discovery warns the player once passed");
 }
-// 缺口扫描族 1 / 审计 P2-64：Mac 失焦按游戏的失焦暂停开关冻结客机、回焦点放开；收尾路径只报失焦不冻结。期望手算（计数）
+// Focus pause policy: when pause-unfocused is enabled (default), focus loss suspends guest and mutes controllers;
+// when S2A_FOCUS_PAUSE=0, guest continues running in background and controllers remain active.
 static void test_focus_suspend(void) {
-    stub_freeze_on = stub_freeze_off = stub_clock3_on = stub_clock3_off = 0; focus_frozen = NO;
-    stub_suspend = 1;
-    display_focus_publish(NO);
-    expect(stub_focus == 0 && stub_freeze_on == 1 && stub_clock3_on == 1, "focus loss with suspend requested freezes guest and clock");
-    display_focus_publish(NO);
-    expect(stub_freeze_on == 1, "repeated focus loss does not freeze twice");
     display_focus_publish(YES);
-    expect(stub_focus == 1 && stub_freeze_off == 1 && stub_clock3_off == 1, "focus regained releases guest and clock");
-    stub_suspend = 0;
-    display_focus_publish(NO); display_focus_publish(YES);
-    expect(stub_freeze_on == 1 && stub_freeze_off == 1 && stub_focus == 1, "game that disabled suspend keeps running when unfocused");
-    stub_suspend = 1;
+    stub_freeze_on = stub_freeze_off = stub_clock3_on = stub_clock3_off = 0;
+    stub_suspend = 0; unsetenv("S2A_FOCUS_PAUSE");
+    display_focus_publish(NO); display_focus_publish(NO);
+    expect(stub_focus == 0 && stub_freeze_on == 1 && !stub_freeze_off && stub_clock3_on == 1 && !stub_clock3_off,
+           "default focus loss freezes guest once and stops clock 3");
+    display_focus_publish(YES); display_focus_publish(YES);
+    expect(stub_focus == 1 && stub_freeze_on == 1 && stub_freeze_off == 1 && stub_clock3_on == 1 && stub_clock3_off == 1,
+           "refocus unfreezes once and restores clock 3");
+    setenv("S2A_FOCUS_PAUSE", "0", 1);
+    display_focus_publish(NO);
+    expect(stub_focus == 1 && !dm_focus_now() && stub_freeze_on == 1 && stub_freeze_off == 1,
+           "S2A_FOCUS_PAUSE=0 keeps guest running and controller focus active on focus loss");
+    display_focus_publish(YES);
+    expect(stub_focus == 1 && dm_focus_now() && stub_freeze_on == 1 && stub_freeze_off == 1,
+           "display focus returns cleanly when S2A_FOCUS_PAUSE=0");
+    unsetenv("S2A_FOCUS_PAUSE");
     display_focus_publish_ex(NO, NO);
-    expect(stub_focus == 0 && stub_freeze_on == 1, "shutdown publishes focus loss without freezing");
-    display_focus_publish(NO); display_focus_publish_ex(NO, NO);
-    expect(stub_freeze_on == 2 && stub_freeze_off == 2 && stub_clock3_off == 2, "shutdown releases a focus freeze");
-    stub_suspend = 0; display_focus_publish(YES);
-    puts("Mac lifecycle: focus loss freezes only when the game asks, regains and shutdown release passed");
+    expect(stub_focus == 0 && stub_freeze_on == 1, "shutdown withdraws focus without freezing teardown");
+    display_focus_publish(YES);
+    puts("Mac lifecycle: focus-pause toggle and shutdown policy passed");
+}
+static void test_live_input_settings(void) {
+    config = default_config();
+    NSDictionary *initial = config;
+    S2AMacInputSettings *panel = [S2AMacInputSettings new];
+    panel.readMapping = ^{ return config; };
+    panel.readDevices = ^{ return @[@{@"id":@"fixture-pad", @"name":@"Synthetic pad"}]; };
+    panel.applyMapping = ^NSString *(NSDictionary *next) { return apply_live_input(next); };
+    panel.editing = ^(BOOL on) { input_settings_open = on; reset_input(); };
+    [panel rebuild];
+    expect(!panel.window.visible && [panel.window isKindOfClass:NSPanel.class], "settings rebuild never presents a game/window");
+    expect(panel.window.collectionBehavior & NSWindowCollectionBehaviorFullScreenAuxiliary, "settings support fullscreen auxiliary panel");
+    expect(panel.buttons.count == 16 && panel.axes.count == 4, "settings expose real one-player button and stick mappings");
+    for (int mode = 0; mode < 5; mode++) {
+        NSEventModifierFlags flags = mode == 0 ? 0 : NSEventModifierFlagCommand;
+        if (mode == 2) flags |= NSEventModifierFlagShift;
+        NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0
+            windowNumber:0 context:nil characters:mode == 3 ? @"，" : @"," charactersIgnoringModifiers:mode == 3 ? @"，" : @"," isARepeat:NO keyCode:43];
+        expect(s2a_input_settings_shortcut(event) == (mode == 1 || mode == 3 || mode == 4), "Command-comma matches physical key across input methods, not bare comma/chord");
+    }
+    panel.deadzone.stringValue = @"bad"; [panel apply:nil];
+    expect([config isEqual:initial], "invalid deadzone leaves live mapping unchanged");
+    panel.deadzone.stringValue = @"0.25";
+    [panel.buttons[0] selectItemAtIndex:2]; // conflicts with existing B binding
+    [panel apply:nil];
+    expect([config isEqual:initial], "duplicate mapping fails transactionally");
+    [panel.buttons[1] selectItemAtIndex:1]; // swap A/B together
+    [panel apply:nil];
+    expect([config[@"gamepad"][@"A"] isEqual:@"south"] && [config[@"gamepad"][@"B"] isEqual:@"east"] &&
+           [config[@"deadzone"] doubleValue] == .25, "validated live mapping applies as one snapshot");
+    input_settings_open = YES; focused = YES; [keys addObject:@14]; sample_input();
+    int32_t sticks[4]; expect(!s2a_vpad_read(sticks), "settings suppress game input without freezing guest");
+    panel.editing(NO); config = initial;
+    expect(!input_settings_open && keys.count == 0, "closing settings discards held desktop input");
+    puts("Mac live settings: shortcut, validation, hot apply and editing isolation passed");
 }
 static void test_untrusted_key_state(void) {   // 审计 P1-57：系统状态误报「已松开」时不丢按住的键，也不永久停掉核对
     config = default_config(); reset_input(); focused = YES;
@@ -520,6 +656,8 @@ static void test_capture_key_order(void) {
 @property(strong) FakePad *extendedGamepad;
 @property(strong) dispatch_queue_t handlerQueue;
 @property(strong) id motion;
+@property(copy) NSString *productCategory;
+@property(copy) NSString *vendorName;
 @end
 @implementation FakeController
 @end
@@ -552,10 +690,56 @@ static void test_pro_sensor_control(void) {
 static void test_active_pad(void) {
     FakePad *old = [FakePad new], *recent = [FakePad new]; old.lastEventTimestamp = 10; recent.lastEventTimestamp = 20;
     NSArray *list = @[fake_controller(nil), fake_controller(old), fake_controller(recent)];
-    expect((id)active_pad(list) == recent, "picks the extended gamepad with the latest input, skipping a remote first in the list");
+    expect((id)s2a_active_system_pad(list, @"") == recent, "picks the extended gamepad with the latest input, skipping a remote first in the list");
     old.lastEventTimestamp = 30;
-    expect((id)active_pad(list) == old, "switches when the other pad gets newer input");
-    expect(active_pad(@[fake_controller(nil)]) == nil && active_pad(@[]) == nil, "no extended gamepad: none");
+    expect((id)s2a_active_system_pad(list, @"") == old, "switches when the other pad gets newer input");
+    FakeController *one = fake_controller(old), *two = fake_controller(recent);
+    one.productCategory = two.productCategory = @"Xbox";
+    one.vendorName = @"First"; two.vendorName = @"Second";
+    expect((id)s2a_active_system_pad(@[one,two], @"gc:Xbox:Second") == recent, "explicit selection ignores newer input on other pad");
+    expect(s2a_active_system_pad(@[one], @"gc:Xbox:Second") == nil, "disconnected selection does not fall back");
+    two.vendorName = @"First";
+    expect(s2a_active_system_pad(@[one,two], @"gc:Xbox:First") == nil, "identical models are ambiguous, not silently reassigned");
+    expect(s2a_active_system_pad(@[fake_controller(nil)], @"") == nil && s2a_active_system_pad(@[], @"") == nil, "no extended gamepad: none");
+}
+
+@interface FixtureControllerInput : S2AControllerInput
+@property(copy) NSDictionary *fixture;
+@end
+@implementation FixtureControllerInput
+- (NSDictionary *)snapshot { return self.fixture; }
+@end
+static void test_controller_config_and_mapping(void) {
+    NSMutableDictionary *c = [default_config() mutableCopy];
+    [c removeObjectForKey:@"controller"];
+    s2a_input_config parsed;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:c options:0 error:NULL];
+    expect(s2a_input_config_parse(json.bytes, json.length, &parsed) == 0 && parsed.controller_backend == 0 && !parsed.controller_device[0], "legacy config defaults to system");
+    for (int backend = 0; backend < 3; backend++) {
+        c[@"controller"] = @{@"backend": @[@"system",@"nspro-hid",@"disabled"][backend], @"device":@"test-device"};
+        json = [NSJSONSerialization dataWithJSONObject:c options:0 error:NULL];
+        expect(s2a_input_config_parse(json.bytes,json.length,&parsed) == 0 && parsed.controller_backend == backend && !strcmp(parsed.controller_device,"test-device"), "controller config round trip");
+    }
+    for (id bad in @[@{@"backend":@"auto",@"device":@""}, @{@"backend":@"system",@"device":@1}, @{@"backend":@"system"}, NSNull.null]) {
+        c[@"controller"] = bad; json = [NSJSONSerialization dataWithJSONObject:c options:0 error:NULL];
+        expect(s2a_input_config_parse(json.bytes,json.length,&parsed) != 0, "invalid controller config rejected");
+    }
+    FixtureControllerInput *input = [FixtureControllerInput new]; controller_input = input;
+    keys = [NSMutableSet set]; mouse = [NSMutableSet set]; modifiers = 0; focused = YES;
+    config = @{@"keyboard":@{}, @"mouse":@{}, @"gamepad":@{@"Y":@"east"}, @"axes":@{@"RX":@{@"source":@"leftX", @"invert":@YES}}, @"deadzone":@0.15};
+    input.fixture = @{@"east":@YES, @"leftX":@0.5}; sample_input();
+    int32_t axes[4]; expect(s2a_vpad_read(axes) == (1u << 3) && axes[2] == -16383 && axes[0] == 0, "shared controller snapshot obeys button remap, axis remap and inversion");
+    input.fixture = @{@"leftX":@0.1}; sample_input();
+    expect(s2a_vpad_read(axes) == 0 && axes[2] == 0, "controller deadzone and release");
+    input.fixture = @{@"east":@YES}; focused = NO; unsetenv("S2A_FOCUS_PAUSE"); sample_input();
+    expect(s2a_vpad_read(axes) == 0, "assigned controller is muted while window is unfocused and pause-unfocused is enabled");
+    setenv("S2A_FOCUS_PAUSE", "0", 1); sample_input();
+    expect(s2a_vpad_read(axes) == (1u << 3), "assigned controller continues while window is unfocused when S2A_FOCUS_PAUSE=0");
+    unsetenv("S2A_FOCUS_PAUSE");
+    focused = YES; input.fixture = @{}; sample_input();
+    expect(s2a_vpad_read(axes) == 0, "disconnected controller is neutral");
+    controller_input = nil; config = default_config();
+    puts("Controller: selection, ambiguity, schema compatibility, remapping, deadzone and neutral-state checks passed");
 }
 
 // A2 事件驱动输入：Mac 导出 s2a_vpad_read_ex，sample_input 同步写 runtime/src/pad.c，InputPump 才能从 Sleep(16)
@@ -997,12 +1181,17 @@ static void test_pad_fast_path(void) {
     dispatch_async(pad1.handlerQueue, ^{ pad1.extendedGamepad.valueChangedHandler(pad1.extendedGamepad, pad1.extendedGamepad.buttonB); });
     run_loop_for(0.05);
 
-    // ⑤ 失焦静音：快速路径发零
-    focused = NO; input_mute_refresh(); sample_input(); slot_fake_pad(0, pad0);
+    // ⑤ 失焦静音：快速路径发零；关闭「切到别的窗口时暂停」时失焦照常发布手柄按键
+    focused = NO; unsetenv("S2A_FOCUS_PAUSE"); input_mute_refresh(); sample_input(); slot_fake_pad(0, pad0);
     [pad0.extendedGamepad.buttonA setValue:1];
     pad0.extendedGamepad.valueChangedHandler(pad0.extendedGamepad, pad0.extendedGamepad.buttonA);
     read_ex(&snap);
     expect(snap.buttons == 0, "muted fast path publishes zeros");
+    setenv("S2A_FOCUS_PAUSE", "0", 1); input_mute_refresh(); sample_input(); slot_fake_pad(0, pad0);
+    pad0.extendedGamepad.valueChangedHandler(pad0.extendedGamepad, pad0.extendedGamepad.buttonA);
+    read_ex(&snap);
+    expect(snap.buttons == 1, "unfocused fast path publishes pad buttons when S2A_FOCUS_PAUSE=0");
+    unsetenv("S2A_FOCUS_PAUSE"); input_mute_refresh(); sample_input();
     focused = YES; input_mute_refresh(); sample_input();
     read_ex(&snap);
     expect(snap.buttons == 0, "refocus keeps input neutral until the next event");
@@ -1172,6 +1361,39 @@ static NSDictionary *frozen_original_config(void) {
              @"mouseOptions": @{@"mode": @"camera", @"sensitivityX": @1, @"sensitivityY": @1}};
 }
 
+@interface S2AFailedInputPreferences : NSUserDefaults
+@property(nonatomic) BOOL failSync, throwWrite;
+@end
+@implementation S2AFailedInputPreferences
+- (BOOL)synchronize { return self.failSync ? NO : [super synchronize]; }
+- (void)setObject:(id)value forKey:(NSString *)key {
+    if (self.throwWrite) @throw [NSException exceptionWithName:@"SyntheticWriteFailure" reason:@"test" userInfo:nil];
+    [super setObject:value forKey:key];
+}
+@end
+
+// Readers must see one complete table, never mixed fields while UI applies.
+static void *ios_live_read_stress(void *unused) {
+    (void)unused;
+    for (int i = 0; i < 12000; i++) {
+        s2a_pad_snapshot value; s2a_ios_input_read(&value);
+        if (!value.buttons) {
+            if (value.axes[0] || value.axes[1] || value.axes[2] || value.axes[3]) return (void *)1;
+        } else if (value.buttons == 1) {
+            if (value.axes[0] != 20000 || value.axes[3]) return (void *)2;
+        } else if (value.buttons == 2) {
+            if (value.axes[0] || value.axes[3] != -20000) return (void *)3;
+        } else return (void *)4;
+    }
+    return NULL;
+}
+static void *ios_live_publish_stress(void *unused) {
+    (void)unused;
+    const int32_t axes[4] = {20000,0,0,0};
+    for (int i = 0; i < 12000; i++) s2a_pad_update(S2A_PAD_SYSTEM, 1, 1, axes);
+    return NULL;
+}
+
 // CPU/Foundation-only slice. Calls the actual Mac adapter above and actual iOS
 // file adapter (linked from ios/input_config.m), without creating NSApp,
 // a Metal layer, a game process, or querying an attached input device.
@@ -1190,6 +1412,9 @@ static void test_shared_input_config(void) {
         @"deadzone":@0.2, @"mouseOptions":@{@"mode":@"camera",@"sensitivityX":@2,@"sensitivityY":@0.5}};
     NSArray *changes = @[
         @{@"expected":@0},
+        @{@"players":@{@"1":@{@"backend":@"auto",@"device":@""}, @"2":@{@"backend":@"auto",@"device":@""},
+                       @"3":@{@"backend":@"auto",@"device":@""}, @"4":@{@"backend":@"auto",@"device":@""}},
+          @"expected":@0, @"iosExpected":@(S2A_INPUT_CONFIG_PLAYERS_UNSUPPORTED)},
         @{@"schema":@2,@"expected":@(S2A_INPUT_CONFIG_SCHEMA)},
         @{@"schema":@"1",@"expected":@(S2A_INPUT_CONFIG_SCHEMA)},
         @{@"schema":@YES,@"expected":@(S2A_INPUT_CONFIG_SCHEMA)},
@@ -1205,14 +1430,21 @@ static void test_shared_input_config(void) {
     ];
     for (NSDictionary *change in changes) {
         NSMutableDictionary *fixture = [base mutableCopy];
-        for (NSString *key in change) if (![key isEqual:@"expected"]) fixture[key] = change[key];
+        for (NSString *key in change) if (![key isEqual:@"expected"] && ![key isEqual:@"iosExpected"]) fixture[key] = change[key];
         NSData *data = [NSJSONSerialization dataWithJSONObject:fixture options:0 error:NULL];
         CONFIG_EXPECT([data writeToFile:path atomically:YES], "write synthetic JSON fixture");
         memset(&mac,0x5a,sizeof mac); memset(&ios,0x5a,sizeof ios);
         int expected = [change[@"expected"] intValue];
+        int iosExpected = change[@"iosExpected"] ? [change[@"iosExpected"] intValue] : expected;
         int a = mac_input_config_read(path.fileSystemRepresentation,&mac), b = s2a_ios_input_config_read(path.fileSystemRepresentation,&ios);
-        CONFIG_EXPECT(a == expected && b == expected, "same hand-declared parse/error result on both platform adapters");
-        CONFIG_EXPECT(!memcmp(&mac,&ios,sizeof mac), "byte-identical portable tables including failure-not-published cases");
+        CONFIG_EXPECT(a == expected && b == iosExpected, "same hand-declared parse/error result on both platform adapters");
+        if (expected == iosExpected) {
+            CONFIG_EXPECT(!memcmp(&mac,&ios,sizeof mac), "byte-identical portable tables including failure-not-published cases");
+        }
+        if (expected) {
+            s2a_input_config untouched; memset(&untouched, 0x5a, sizeof untouched);
+            CONFIG_EXPECT(!memcmp(&mac, &untouched, sizeof mac), "rejected platform config never publishes partial state");
+        }
         if (!expected) {
             NSDictionary *converted = input_config_dictionary(&mac);
             CONFIG_EXPECT(mac.keyboard[0].code == 49 && mac.keyboard[0].modifiers == 3 && mac.keyboard[1].code == 56, "handwritten custom physicalkey table");
@@ -1238,14 +1470,99 @@ static void test_shared_input_config(void) {
     const char *priorDocs = getenv("S2A_DOCS"), *priorPath = getenv("S2A_INPUT_CONFIG");
     NSString *savedDocs = priorDocs ? @(priorDocs) : nil, *savedPath = priorPath ? @(priorPath) : nil;
     setenv("S2A_DOCS",directory.fileSystemRepresentation,1); setenv("S2A_INPUT_CONFIG","input.json",1);
-    CONFIG_EXPECT(!s2a_ios_input_config_load(), "iOS shell loads relative imported config under Documents");
+    NSUserDefaults *startupDefaults = [[NSUserDefaults alloc] initWithSuiteName:[@"s2arm-input-startup-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(startupDefaults), "iOS shell loads relative imported config under Documents");
     const s2a_input_config *active = s2a_ios_input_config_current();
     CONFIG_EXPECT(active && active->keyboard[0].code == 49 && active->axes[0].source == 3, "iOS published table is the parsed custom mapping");
     CONFIG_EXPECT([[@"{" dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES], "replace own fixture with invalid JSON");
     // 11-17 维护者：读不懂不再拒启——仍回错误码（调用方黄字说明），这局换成默认键位，不沿用上一份映射
     { s2a_input_config fallback; s2a_input_config_default(&fallback);
-      const s2a_input_config *now = (s2a_ios_input_config_load() == S2A_INPUT_CONFIG_JSON) ? s2a_ios_input_config_current() : NULL;
+      const s2a_input_config *now = (s2a_ios_input_config_load_preferences(startupDefaults) == S2A_INPUT_CONFIG_JSON) ? s2a_ios_input_config_current() : NULL;
       CONFIG_EXPECT(now && !memcmp(now, &fallback, sizeof fallback), "failed iOS startup load falls back to the default mapping, not the previous one"); }
+    // Live mapping uses the production canonical pad snapshot, not injected
+    // output values. No controller or AppKit session is opened by this test.
+    const char *live = "{\"schema\":1,\"keyboard\":{},\"mouse\":{},\"gamepad\":{\"B\":\"east\",\"LS_LEFT\":\"south\"},\"axes\":{\"RY\":{\"source\":\"leftX\",\"invert\":true}},\"deadzone\":0.2,\"mouseOptions\":{\"mode\":\"off\",\"sensitivityX\":1,\"sensitivityY\":1}}";
+    CONFIG_EXPECT(!s2a_ios_input_config_apply(live, strlen(live)), "valid live table accepted");
+    s2a_pad_set_active(1);
+    int32_t rawAxes[4] = {16384, 0, 0, 0}; s2a_pad_snapshot sample, previous;
+    s2a_pad_update(S2A_PAD_SYSTEM, 1, 3, rawAxes);
+    s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(sample.buttons == 2 && sample.axes[0] == -32767 && sample.axes[3] == -16384, "physical source remaps buttons, stick direction, axis and inversion");
+    previous = sample;
+    CONFIG_EXPECT(s2a_ios_input_config_apply("{", 1) == S2A_INPUT_CONFIG_JSON, "invalid live table rejected");
+    s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(sample.buttons == previous.buttons && sample.input_epoch == previous.input_epoch, "failed apply preserves held input and mapping epoch");
+    CONFIG_EXPECT(!s2a_ios_input_config_apply(live, strlen(live)), "second live apply accepted");
+    s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(!sample.buttons && !sample.axes[0] && sample.input_epoch != previous.input_epoch, "apply clears old physical latches and advances epoch");
+    s2a_pad_update(S2A_PAD_BLE, 1, 1, (int32_t[4]){1000,0,0,0});
+    s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(sample.buttons == 2 && !sample.axes[3], "BLE uses same map and configured deadzone");
+    s2a_pad_set_active(0); s2a_pad_set_active(1);
+    s2a_pad_update(S2A_PAD_TOUCH, 1, 1, rawAxes); s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(sample.buttons == 1 && sample.axes[0] == 16384 && !sample.axes[3], "physical mapping never changes virtual touch layout");
+    s2a_pad_set_active(0);
+    NSString *template = @"{\"schema\":1,\"keyboard\":{},\"mouse\":{},\"gamepad\":{%@},\"axes\":{%@},\"deadzone\":0.2,\"mouseOptions\":{\"mode\":\"off\",\"sensitivityX\":1,\"sensitivityY\":1}}";
+    NSString *tables[2] = {
+        [NSString stringWithFormat:template, @"\"A\":\"east\"", @"\"LX\":{\"source\":\"leftX\"}"],
+        [NSString stringWithFormat:template, @"\"B\":\"east\"", @"\"RY\":{\"source\":\"leftX\",\"invert\":true}"]
+    };
+    CONFIG_EXPECT(!s2a_ios_input_config_apply(tables[0].UTF8String, strlen(tables[0].UTF8String)), "initialize live concurrency table");
+    s2a_pad_set_active(1);
+    pthread_t liveReader, liveWriter;
+    CONFIG_EXPECT(!pthread_create(&liveReader, NULL, ios_live_read_stress, NULL), "start independent HID reader");
+    CONFIG_EXPECT(!pthread_create(&liveWriter, NULL, ios_live_publish_stress, NULL), "start independent physical sampler");
+    for (int i = 0; i < 1000; i++) {
+        const char *json = tables[i % 2].UTF8String;
+        CONFIG_EXPECT(!s2a_ios_input_config_apply(json, strlen(json)), "publish complete table during sampling");
+    }
+    void *readResult;
+    CONFIG_EXPECT(!pthread_join(liveWriter, NULL) && !pthread_join(liveReader, &readResult) && !readResult,
+                  "concurrent sampler/apply/HID readers never mix mapping fields");
+    s2a_pad_set_active(0);
+    NSString *suite = [@"s2arm-input-test-" stringByAppendingString:NSUUID.UUID.UUIDString];
+    S2AFailedInputPreferences *preferences = [[S2AFailedInputPreferences alloc] initWithSuiteName:suite];
+    NSString *oldRoot = getenv("S2A_RYU_DATA") ? @(getenv("S2A_RYU_DATA")) : nil;
+    NSString *oldGame = getenv("S2A_LAUNCH_GAME_ID") ? @(getenv("S2A_LAUNCH_GAME_ID")) : nil;
+    NSString *firstRoot = [directory stringByAppendingPathComponent:@"user01/ryujinx"];
+    NSString *secondRoot = [directory stringByAppendingPathComponent:@"user02/ryujinx"];
+    setenv("S2A_RYU_DATA",firstRoot.UTF8String,1); setenv("S2A_LAUNCH_GAME_ID","0100000000000001",1);
+    unsetenv("S2A_INPUT_CONFIG");
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && s2a_ios_input_config_can_save(), "frozen root/game admits scoped preferences");
+    CONFIG_EXPECT(!s2a_ios_input_config_apply_saved(live, strlen(live), preferences), "save and publish scoped live table");
+    // Mutation of the process environment cannot redirect a running UI write.
+    setenv("S2A_RYU_DATA",secondRoot.UTF8String,1);
+    const char *firstTable = tables[0].UTF8String;
+    CONFIG_EXPECT(!s2a_ios_input_config_apply_saved(firstTable, strlen(firstTable), preferences), "save still targets frozen first user");
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences), "second user starts independent defaults");
+    CONFIG_EXPECT(s2a_ios_input_config_current()->gamepad[1] == 1, "second user cannot inherit first mapping");
+    setenv("S2A_RYU_DATA",firstRoot.UTF8String,1);
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && s2a_ios_input_config_current()->gamepad[1] == -1,
+                  "restart loads saved first-user mapping instead of another user");
+    CONFIG_EXPECT(s2a_ios_input_config_apply_saved("{",1,preferences) == S2A_INPUT_CONFIG_JSON, "invalid saved change rejected");
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && s2a_ios_input_config_current()->gamepad[1] == -1,
+                  "invalid change preserves persistent table");
+    s2a_pad_set_active(1); s2a_pad_update(S2A_PAD_SYSTEM,1,1,(int32_t[4]){20000,0,0,0});
+    s2a_ios_input_read(&previous);
+    preferences.failSync = YES;
+    CONFIG_EXPECT(s2a_ios_input_config_apply_saved(live,strlen(live),preferences) == S2A_INPUT_CONFIG_IO, "failed preference sync rejects publication");
+    s2a_ios_input_read(&sample);
+    CONFIG_EXPECT(sample.buttons == previous.buttons && sample.input_epoch == previous.input_epoch, "failed persistence retains current input and epoch");
+    preferences.failSync = NO; preferences.throwWrite = YES;
+    CONFIG_EXPECT(s2a_ios_input_config_apply_saved(live,strlen(live),preferences) == S2A_INPUT_CONFIG_IO, "preference exception releases publication lock");
+    CONFIG_EXPECT(s2a_ios_input_config_current()->gamepad[1] == -1, "exception cannot partially publish mapping");
+    preferences.throwWrite = NO;
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && s2a_ios_input_config_current()->gamepad[1] == -1, "failure restores previous preference value");
+    s2a_pad_set_active(0);
+    setenv("S2A_LAUNCH_GAME_ID","0100000000000002",1);
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && s2a_ios_input_config_current()->gamepad[1] == 1,
+                  "different game cannot inherit mapping even with same root fixture");
+    unsetenv("S2A_RYU_DATA");
+    CONFIG_EXPECT(!s2a_ios_input_config_load_preferences(preferences) && !s2a_ios_input_config_can_save(), "unscoped host cannot write a global preference");
+    CONFIG_EXPECT(s2a_ios_input_config_apply_saved(live,strlen(live),preferences) == S2A_INPUT_CONFIG_IO, "unscoped save rejected");
+    [preferences removePersistentDomainForName:suite];
+    if (oldRoot) setenv("S2A_RYU_DATA",oldRoot.UTF8String,1); else unsetenv("S2A_RYU_DATA");
+    if (oldGame) setenv("S2A_LAUNCH_GAME_ID",oldGame.UTF8String,1); else unsetenv("S2A_LAUNCH_GAME_ID");
     if (savedDocs) setenv("S2A_DOCS",savedDocs.UTF8String,1); else unsetenv("S2A_DOCS");
     if (savedPath) setenv("S2A_INPUT_CONFIG",savedPath.UTF8String,1); else unsetenv("S2A_INPUT_CONFIG");
     CONFIG_EXPECT([NSFileManager.defaultManager removeItemAtPath:directory error:NULL], "remove only synthetic fixture directory created by this test");
@@ -1556,7 +1873,8 @@ int main(int argc, const char **argv) {
         test_active_pad();
         test_pro_sensor_control();
         test_pad_slots();
-    test_pad_slot_pin();
+        test_controller_config_and_mapping();
+        test_pad_slot_pin();
         // 同一个真实前端实现：通用 attach 先发布层，detach 先通知再清层；
         // 直连只发布/清层，不通知尚未初始化且不应初始化的通用 NxGal。
         CAMetalLayer *front = [CAMetalLayer layer];
@@ -1587,6 +1905,7 @@ int main(int argc, const char **argv) {
         test_save_atomic_warning();
         test_lan_warning();
         test_focus_suspend();
+        test_live_input_settings();
         test_untrusted_key_state();
         test_modifier_false_release();
         test_keyboard_hid();
@@ -1708,6 +2027,8 @@ int main(int argc, const char **argv) {
         view.wantsLayer = YES; view.layer = [CAMetalLayer layer]; [view layout];
         expect(width == 640 && height == 360, "view publishes native pixel size");
         expect(fit_w == 640 && fit_h == 360, "view hands the same pixel size to the widen screen (P1-83: the window's aspect follows)");
+        test_motion_bridge();
+        test_system_motion_bridge();
         puts("Mac input/guide: mappings, identity, snapshots and graphics-mode layer checks passed");
     }
     return 0;

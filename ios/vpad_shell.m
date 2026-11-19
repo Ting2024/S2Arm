@@ -72,7 +72,9 @@ int s2a_shell_vpad_set_hold_lock(const char *game_id, int enabled) {
 int s2a_shell_vpad_select(const char *game_id, const char *layout_id, int split) {
     @autoreleasepool {
         S2AVPadLayoutStore *s = store_for(game_id, split!=0); if (!s || !layout_id) return 0;
-        NSString *i = !strcmp(layout_id, "mine") ? S2AVPadLayoutMineIdentifier : !strcmp(layout_id, "default") ? S2AVPadLayoutDefaultIdentifier : nil;
+        NSString *i = !strcmp(layout_id, "mine") ? S2AVPadLayoutMineIdentifier
+                    : !strcmp(layout_id, "default") ? S2AVPadLayoutDefaultIdentifier
+                    : !strcmp(layout_id, "touch") ? S2AVPadLayoutTouchIdentifier : nil;
         if (!i) return 0;
         NSError *e; BOOL ok = [s selectIdentifier:i error:&e] && [s markManual:&e];
         if (!ok) NSLog(@"S2Arm 游戏库：%s 切到 %s 失败：%@", game_id, layout_id, e.localizedDescription);

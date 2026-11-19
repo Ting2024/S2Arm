@@ -42,6 +42,7 @@ prefix = """#import <Foundation/Foundation.h>
 #include <sys/stat.h>
 #include "native.h"
 #include "s2a_pad.h"
+#include "input_config.h"
 #import "settings.h"   // vpad.m g_res_scale → s2a_ios_res_scale（审计 P1-9），连真实 settings.m
 #include "s2a_docs.h"   // vpad.m 手柄录制目录取文档根（11-07 文档根唯一取法）
 """
@@ -58,7 +59,7 @@ for name, source in (("old", old), ("new", new)):
     command = ["xcrun", "--sdk", "macosx", "clang", "-O1", "-g", "-fobjc-arc",
                "-Wall", "-Wextra", "-Wno-unused-parameter", "-Iruntime/include", "-Iruntime/src", "-Iios",
                "-framework", "Foundation", *WEAK,
-               "-o", str(OUT / name), str(path), "runtime/src/pad.c", "ios/settings.m", "ios/cpatch_model.m", "runtime/src/caps.c", "runtime/src/patch.c", "runtime/src/launchctx.c"]
+               "-o", str(OUT / name), str(path), "runtime/src/pad.c", "runtime/src/input_config.c", "ios/input_config.m", "ios/settings.m", "ios/cpatch_model.m", "runtime/src/caps.c", "runtime/src/patch.c", "runtime/src/launchctx.c"]
     run(*command, env=environment)
     run(str(OUT / name), str(OUT / f"{name}.tsv"), stdout=(OUT / f"{name}.stdout").open("w"))
 

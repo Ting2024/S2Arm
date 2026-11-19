@@ -10326,5 +10326,57 @@
  {
   "source": "这次签好的 S2Arm 没带「提高内存上限」权限：装上后能玩，但大游戏可能内存不够、开局中止。",
   "en": "The S2Arm signed this time is missing the \"Increased Memory Limit\" entitlement: it installs and runs, but large games may run out of memory and stop at launch."
+ },
+ {
+  "source": "无效手柄设备配置。",
+  "en": "Invalid controller device configuration."
+ },
+ {
+  "source": "游戏标识无效，无法选择用户输入配置。",
+  "en": "Invalid game ID; cannot resolve user input configuration."
+ },
+ {
+  "source": "不能同时保存旧版手柄配置和四玩家配置。",
+  "en": "Cannot save both legacy single-controller config and 4-player config."
+ },
+ {
+  "source": "输入配置锁文件无效，未保存。",
+  "en": "Invalid input configuration lock file; changes were not saved."
+ },
+ {
+  "source": "实体手柄存在重复绑定，未覆盖原有输入设置。",
+  "en": "Duplicate physical controller binding detected; existing input settings were not overwritten."
+ },
+ {
+  "source": "所选设备标识不能用于游戏内绑定；请改为自动分配，或进入游戏选择实体手柄。",
+  "en": "Selected device ID cannot be bound for in-game input; switch to auto-assign or choose a physical controller in game."
+ },
+ {
+  "source": "游戏或另一项操作正在使用此输入配置；请关闭游戏后重试，或在游戏内修改。",
+  "en": "The game or another operation is currently using this input configuration; close the game and retry, or adjust it in game."
+ },
+ {
+  "source": "{0} 配置损坏，未覆盖原有输入设置。",
+  "en": "{0} configuration is corrupted; existing input settings were not overwritten."
+ },
+ {
+  "source": "手柄槽位配置损坏，未覆盖原有按键映射。",
+  "en": "Controller slot configuration is corrupted; existing button mappings were not overwritten."
+ },
+ {
+  "source": "同一实体手柄不能绑定多个玩家。",
+  "en": "The same physical controller cannot be bound to multiple players."
+ },
+ {
+  "source": "无效输入来源。",
+  "en": "Invalid input source."
+ },
+ {
+  "source": "无法读取输入配置，请检查权限后重新打开设置。",
+  "en": "Unable to read input configuration; check permissions and reopen settings."
+ },
+ {
+  "source": "输入配置已在其他窗口或游戏内更改，未覆盖任何配置；请重新打开设置后再保存。",
+  "en": "Input configuration was modified in another window or in game; nothing was overwritten. Reopen settings and save again."
  }
 ]

@@ -11,6 +11,9 @@ targets:
       - ios/vpad.m
       - ios/play_layout.m
       - ios/play_reflection.m
+      - ios/input_config.m
+      - ios/input_settings.m
+      - runtime/src/input_config.c
       - ios/vpad_layout.m
       - ios/vpad_settings.m
       - ios/vpad_cheats.m

@@ -14,6 +14,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import stat
@@ -2948,6 +2949,29 @@ def space_free(c):
 def validate_input(config):
     if not isinstance(config, dict) or config.get("schema") != 1:
         raise Failure("不支持的输入映射格式。")
+    controller = config.get("controller", {"backend": "system", "device": ""})
+    if (not isinstance(controller, dict) or controller.get("backend") not in ("system", "nspro-hid", "disabled")
+            or ("type" in controller and (type(controller["type"]) is not int or not 0 <= controller["type"] <= 4))
+            or ("type" in controller and controller["backend"] != "disabled" and ((controller["type"] == 4) != (controller["backend"] == "nspro-hid")))
+            or ("source" in controller and (type(controller["source"]) is not int or controller["source"] not in (0, 1, 2, 3, 5)))
+            or not isinstance(controller.get("device"), str) or "\0" in controller["device"]
+            or len(controller["device"].encode("utf-8")) >= 256):
+        raise Failure("无效手柄设备配置。")
+    if "players" in config:
+        if "controller" in config:
+            raise Failure("不能同时保存旧版手柄配置和四玩家配置。")
+        players = config["players"]
+        if not isinstance(players, dict) or set(players) != {"1", "2", "3", "4"}:
+            raise Failure("无效手柄设备配置。")
+        for slot_key, selection in players.items():
+            if (not isinstance(selection, dict) or not {"backend", "device"} <= set(selection) or set(selection) - {"backend", "device", "type", "source"}
+                    or selection["backend"] not in ("auto", "system", "nspro-hid", "disabled")
+                    or ("source" in selection and (type(selection["source"]) is not int or selection["source"] not in ((0, 1, 2, 3, 5) if slot_key == "1" else (0, 1, 2, 5))))
+                    or ("type" in selection and (type(selection["type"]) is not int or not 0 <= selection["type"] <= 4))
+                    or ("type" in selection and selection["backend"] != "disabled" and ((selection["type"] == 4) != (selection["backend"] == "nspro-hid")))
+                    or not isinstance(selection["device"], str) or "\0" in selection["device"]
+                    or len(selection["device"].encode("utf-8")) >= 256):
+                raise Failure("无效手柄设备配置。")
     targets = {"A", "B", "X", "Y", "LS", "RS", "L", "R", "ZL", "ZR", "PLUS", "MINUS",
                "LEFT", "UP", "RIGHT", "DOWN", "LS_UP", "LS_DOWN", "LS_LEFT", "LS_RIGHT",
                "RS_UP", "RS_DOWN", "RS_LEFT", "RS_RIGHT"}
@@ -2997,16 +3021,175 @@ def validate_input(config):
     return config
 
 
+MNG_INPUT_FILES = (
+    "controls.txt", "controller-type.txt", "mouse.txt", "controller-slots.plist",
+    "controller-devices.plist", "input-sources.plist", "keyboard-slots.plist",
+    "physical-keyboards.plist", "stick-bindings.plist",
+)
+
+
+def _mng_input_root(c, gid):
+    if not re.fullmatch(r"[0-9a-fA-F]{16}", gid or ""):
+        raise Failure("游戏标识无效，无法选择用户输入配置。")
+    return contained(c.library, c.library / "mappings" / "mng" / gid.upper())
+
+
+@contextlib.contextmanager
+def _mng_input_lock(c, gid):
+    import filelock
+    root = _mng_input_root(c, gid)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root, 0o700)
+    fd = os.open(root / ".input-owner.lock", os.O_RDWR | os.O_CREAT |
+                 getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+    with os.fdopen(fd, "r+b") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise Failure("输入配置锁文件无效，未保存。")
+        try:
+            filelock.try_lock(handle)
+        except BlockingIOError:
+            raise Failure("游戏或另一项操作正在使用此输入配置；请关闭游戏后重试，或在游戏内修改。") from None
+        try:
+            _mng_input_root(c, gid)
+            yield root
+        finally:
+            filelock.unlock(handle)
+
+
+def _sync_mng_players(c, gid, config):
+    with _mng_input_lock(c, gid) as root:
+        _write_mng_players(root, config)
+
+
+def _write_mng_players(mng_root, config):
+    players = config.get("players")
+    if not isinstance(players, dict) or set(players) != {"1", "2", "3", "4"}:
+        return
+    src_path = mng_root / "input-sources.plist"
+    dev_path = mng_root / "controller-devices.plist"
+    def device_valid(key):
+        return isinstance(key, str) and (key in ("auto", "none") or
+            re.fullmatch(r"session:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", key) is not None)
+
+    def read_document(path, field, valid):
+        try:
+            doc = plistlib.loads(path.read_bytes())
+            values = doc[field]
+            if (type(doc.get("version")) is not int or doc["version"] != 1 or
+                    not isinstance(values, list) or len(values) != 4 or not valid(values)):
+                raise ValueError("invalid preferences")
+            return values
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, plistlib.InvalidFileException):
+            raise Failure(f"{path.name} 配置损坏，未覆盖原有输入设置。") from None
+
+    sources = [0, 5, 5, 5]
+    if src_path.exists():
+        sources = read_document(src_path, "sources", lambda values: all(
+            type(x) is int and x in ((0, 1, 2, 3, 5) if i == 0 else (0, 1, 2, 5))
+            for i, x in enumerate(values)))
+    ports = [{"id": "auto", "name": ""} for _ in range(4)]
+    if dev_path.exists():
+        ports = read_document(dev_path, "ports", lambda values: all(
+            isinstance(p, dict) and device_valid(p.get("id")) and
+            isinstance(p.get("name"), str) and len(p["name"]) <= 512 for p in values))
+        reserved = [p["id"].lower() for p in ports if p["id"].startswith("session:")]
+        if len(reserved) != len(set(reserved)):
+            raise Failure("实体手柄存在重复绑定，未覆盖原有输入设置。")
+    slot_path = mng_root / "controller-slots.plist"
+    legacy = mng_root / "controls.txt"
+    layout_text = legacy.read_text() if legacy.is_file() else ""
+    slots = [{"type": 0, "layout": layout_text} for _ in range(4)]
+    if slot_path.is_file():
+        try:
+            doc = plistlib.loads(slot_path.read_bytes())
+            saved = doc["ports"]
+            if not isinstance(doc, dict) or doc.get("version") != 1 or not isinstance(saved, list) or len(saved) != 4 or any(
+                    not isinstance(p, dict) or type(p.get("type")) is not int or
+                    not 0 <= p["type"] <= 4 or not isinstance(p.get("layout"), str) for p in saved):
+                raise ValueError("invalid slots")
+            slots = [dict(p) for p in saved]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, plistlib.InvalidFileException):
+            raise Failure("手柄槽位配置损坏，未覆盖原有按键映射。") from None
+    reserved = set()
+    for idx, slot_key in enumerate(("1", "2", "3", "4")):
+        sel = players[slot_key]
+        backend = sel.get("backend", "system")
+        dev = sel.get("device", "") or "auto"
+        if not device_valid(dev):
+            raise Failure("所选设备标识不能用于游戏内绑定；请改为自动分配，或进入游戏选择实体手柄。")
+        if dev.startswith("session:"):
+            if dev.lower() in reserved:
+                raise Failure("同一实体手柄不能绑定多个玩家。")
+            reserved.add(dev.lower())
+        slots[idx]["type"] = sel.get("type", slots[idx]["type"] if backend == "disabled" else (4 if backend == "nspro-hid" else 0))
+        if "source" in sel:
+            source = sel["source"]
+            if type(source) is not int or source not in ((0, 1, 2, 3, 5) if idx == 0 else (0, 1, 2, 5)):
+                raise Failure("无效输入来源。")
+            sources[idx] = source
+        elif backend == "disabled":
+            sources[idx] = 5 if idx > 0 else 2
+        elif not src_path.exists():
+            sources[idx] = 0 if idx == 0 else 1
+        ports[idx] = {"id": dev, "name": ports[idx]["name"] if ports[idx]["id"] == dev else ""}
+    for path, doc in ((slot_path, {"version": 1, "ports": slots}),
+                      (src_path, {"version": 1, "sources": sources}),
+                      (dev_path, {"version": 1, "ports": ports})):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=mng_root, prefix=".input-", delete=False) as f:
+                temporary = Path(f.name)
+                f.write(plistlib.dumps(doc))
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+def _input_revision(c, target, root):
+    paths = {"game": target, "default": c.private / "default-input.json"}
+    paths.update({name: root / name for name in MNG_INPUT_FILES})
+    revision = {}
+    for name, path in paths.items():
+        try:
+            revision[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            revision[name] = "missing"
+        except OSError:
+            raise Failure("无法读取输入配置，请检查权限后重新打开设置。") from None
+    return revision
+
+
 def save_input(c):
     config = validate_input(c.r["config"])
-    # player：键位设置的玩家（1–4；1 / 没给 = 玩家 1 的 input.json，2–4 = 这款文件夹的 input-pN.json）。
-    #   起局时 build.py 读这些文件交给宿主（S2A_INPUT_CONFIG_P2..P4，槽位各照各玩家的映射采样）
     player = c.r.get("player", 1)
     if type(player) is not int or not 1 <= player <= 4 or (player != 1 and not c.r.get("gameId")):
         raise Failure("无效的玩家序号。")
     if c.r.get("gameId"):
         c.game()
-        target = layout.path(c, c.r["gameId"], "input.json" if player == 1 else f"input-p{player}.json")
+        gid = c.r["gameId"]
+        if player != 1:
+            target = layout.path(c, gid, f"input-p{player}.json")
+            with _mng_input_lock(c, gid) as root:
+                _write_mng_players(root, config)
+                atomic(target, config)
+                if "players" in config:
+                    p1_target = layout.path(c, gid, "input.json")
+                    existing = read(p1_target)
+                    if isinstance(existing, dict):
+                        updated = dict(existing)
+                        updated.pop("controller", None)
+                        updated["players"] = config["players"]
+                        atomic(p1_target, updated)
+            return {}
+        target = layout.path(c, gid, "input.json")
+        with _mng_input_lock(c, gid) as root:
+            if "inputRevision" in c.r and c.r["inputRevision"] != _input_revision(c, target, root):
+                raise Failure("输入配置已在其他窗口或游戏内更改，未覆盖任何配置；请重新打开设置后再保存。")
+            _write_mng_players(root, config)
+            atomic(target, config)
+        return {}
     else:
         target = c.private / "default-input.json"
     atomic(target, config)

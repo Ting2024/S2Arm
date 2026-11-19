@@ -590,3 +590,4 @@
 "vpad.snap.saveChanged.title" = "Go back to the saved moment?";
 "vpad.snap.saveChanged.body" = "The game saved after that moment. Going back also takes the game’s save back to that moment; your current save is backed up first.";
 "vpad.snap.saveChanged.go" = "Go back";
+"vpad.menu.pad14" = "1P–4P Controller Settings";

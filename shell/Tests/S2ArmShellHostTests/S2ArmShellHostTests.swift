@@ -307,6 +307,19 @@ nonisolated(unsafe) private var lastPlayed = ""
     // 选「调整位置…」= 打开编辑页，不存值
     #expect(S2ArmGameSettings.apply(id: "G1", setting: "vpadLayout", value: "edit", stores: stores))
     _ = opts
+    // 1P–4P 输入源：默认 1P=auto，2P–4P=disabled；支持将虚拟手柄/键盘映射到任意槽位并保持槽位间唯一
+    #expect(row(s, "playerSource.1")?.value == "auto" && row(s, "playerSource.2")?.value == "disabled")
+    S2ArmGameSettings.apply(id: "G1", setting: "playerSource.1", value: "system", stores: stores)
+    S2ArmGameSettings.apply(id: "G1", setting: "playerSource.2", value: "touch", stores: stores)
+    S2ArmGameSettings.apply(id: "G1", setting: "playerSource.3", value: "keyboard", stores: stores)
+    s = S2ArmGameSettings.sections(for: "G1", stores: stores, state: .init(selected: "mine", hasMine: true))
+    #expect(row(s, "playerSource.1")?.value == "system")
+    #expect(row(s, "playerSource.2")?.value == "touch")
+    #expect(row(s, "playerSource.3")?.value == "keyboard")
+    // 虚拟手柄改配到 4P 时，原 2P 自动退回 disabled（不出现两个槽位同时抢一个虚拟手柄）
+    S2ArmGameSettings.apply(id: "G1", setting: "playerSource.4", value: "touch", stores: stores)
+    s = S2ArmGameSettings.sections(for: "G1", stores: stores, state: .init(selected: "mine", hasMine: true))
+    #expect(row(s, "playerSource.4")?.value == "touch" && row(s, "playerSource.2")?.value == "disabled")
 }
 
 // 这台 iPhone 上的名字和封面：叠在清单上、可恢复默认，不影响别的款。期望值手写

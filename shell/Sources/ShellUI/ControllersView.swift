@@ -7,6 +7,14 @@ public struct ControllersView: View {
     public var padMap: PadMap
     @Environment(\.shellFocus) private var focus
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var playerSources: [Int: String] = {
+        let d = UserDefaults.standard
+        var map: [Int: String] = [:]
+        for p in 1...4 {
+            map[p] = d.string(forKey: "S2Arm.PlayerSource.\(p)") ?? (p == 1 ? "auto" : "disabled")
+        }
+        return map
+    }()
     public var controllers: [ControllerInfo]
     public var onBack: () -> Void
     /// False when the host has no handler for the shell's own button mapping: its row is not shown.
@@ -54,6 +62,7 @@ public struct ControllersView: View {
                         .background(ShellPalette.surface, in: RoundedRectangle(cornerRadius: 16))
                         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ShellPalette.hairline))
                 }
+                playerSlotsSection
                 mapping
                 VStack(alignment: .leading, spacing: 14) {
                     SectionHeading(title: ShellStrings.text("On a controller"))
@@ -86,6 +95,78 @@ public struct ControllersView: View {
         }
         .foregroundStyle(.white).preferredColorScheme(.dark)
     }
+    private var playerSlotsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeading(title: ShellStrings.text("1P–4P Multiplayer Controller Assignment"))
+            VStack(spacing: 0) {
+                ForEach(1...4, id: \.self) { slot in
+                    let label = "\(slot)P"
+                    let current = playerSources[slot] ?? (slot == 1 ? "auto" : "disabled")
+                    HStack(spacing: 12) {
+                        Text(ShellStrings.setting("\(label) input source"))
+                            .shellText(15.5, .medium)
+                            .foregroundStyle(.white.opacity(0.92))
+                        Spacer()
+                        Menu {
+                            Button(ShellStrings.setting("Controller (Auto-match)")) { setPlayerSource(slot, "auto") }
+                            Button(ShellStrings.setting("Virtual controller")) { setPlayerSource(slot, "touch") }
+                            Button(ShellStrings.setting("Keyboard")) { setPlayerSource(slot, "keyboard") }
+                            Button(ShellStrings.setting("System controller (Bluetooth / MFi)")) { setPlayerSource(slot, "system") }
+                            Button(ShellStrings.setting("Switch 2 Pro (BLE)")) { setPlayerSource(slot, "nspro-hid") }
+                            Button(ShellStrings.setting("Disabled")) { setPlayerSource(slot, "disabled") }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(playerSourceLabel(current))
+                                    .shellText(14, .semibold)
+                                    .foregroundStyle(ShellPalette.cream)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(ShellPalette.cream.opacity(0.75))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.white.opacity(0.08), in: Capsule())
+                        }
+                        .accessibilityIdentifier("controllers.slot.\(label)")
+                    }
+                    .frame(minHeight: 54)
+                    if slot < 4 {
+                        Rectangle().fill(ShellPalette.hairline).frame(height: 1)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .background(ShellPalette.surface, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ShellPalette.hairline))
+        }
+    }
+
+    private func playerSourceLabel(_ code: String) -> String {
+        switch code {
+        case "touch": return ShellStrings.setting("Virtual controller")
+        case "keyboard": return ShellStrings.setting("Keyboard")
+        case "system": return ShellStrings.setting("System controller (Bluetooth / MFi)")
+        case "nspro-hid": return ShellStrings.setting("Switch 2 Pro (BLE)")
+        case "disabled": return ShellStrings.setting("Disabled")
+        default: return ShellStrings.setting("Controller (Auto-match)")
+        }
+    }
+
+    private func setPlayerSource(_ slot: Int, _ value: String) {
+        playerSources[slot] = value
+        UserDefaults.standard.set(value, forKey: "S2Arm.PlayerSource.\(slot)")
+        if value == "touch" || value == "keyboard" {
+            for other in 1...4 where other != slot {
+                if playerSources[other] == value {
+                    let fallback = other == 1 ? "auto" : "disabled"
+                    playerSources[other] = fallback
+                    UserDefaults.standard.set(fallback, forKey: "S2Arm.PlayerSource.\(other)")
+                }
+            }
+        }
+    }
+
     /// The mapping and the test, each a compact row that opens a card of its own.
     private var mapping: some View {
         VStack(alignment: .leading, spacing: 14) {

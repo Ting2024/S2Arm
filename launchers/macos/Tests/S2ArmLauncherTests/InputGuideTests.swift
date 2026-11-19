@@ -3,6 +3,23 @@ import SwiftUI
 @testable import S2ArmLauncher
 
 @MainActor final class InputGuideTests: XCTestCase {
+    func testFourPlayerSelectionsSurviveUnrelatedMappingEdit() throws {
+        var config = InputConfig.standard
+        config.players = Dictionary(uniqueKeysWithValues: (1...4).map {
+            (String($0), ControllerSelection(backend: "auto", device: ""))
+        })
+        config.players?["3"] = ControllerSelection(backend: "nspro-hid", device: "hid:fixture")
+        let data = try JSONEncoder().encode(config)
+        var decoded = try JSONDecoder().decode(InputConfig.self, from: data)
+        XCTAssertEqual(decoded.players?.count, 4)
+        XCTAssertNil(decoded.controller)
+        decoded.keyboard["A"] = KeyBinding(code: 36)
+        let again = try JSONDecoder().decode(InputConfig.self, from: JSONEncoder().encode(decoded))
+        XCTAssertEqual(again.players, config.players)
+        XCTAssertEqual(again.players?["1"]?.backend, "auto")
+        XCTAssertEqual(again.players?["3"]?.device, "hid:fixture")
+    }
+
     func testPreferenceChangesNotifyTheVisibleGuideInBothDirections() {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

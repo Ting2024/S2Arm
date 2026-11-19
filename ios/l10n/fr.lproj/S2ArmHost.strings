@@ -584,3 +584,4 @@
 "vpad.snap.saveChanged.title" = "Revenir à l’instant sauvegardé ?";
 "vpad.snap.saveChanged.body" = "Le jeu a sauvegardé depuis. Revenir ramène aussi sa sauvegarde à cet instant ; la sauvegarde actuelle est d’abord copiée.";
 "vpad.snap.saveChanged.go" = "Revenir";
+"vpad.menu.pad14" = "Réglages des manettes (1P–4P)";
