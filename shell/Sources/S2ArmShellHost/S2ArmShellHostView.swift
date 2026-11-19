@@ -30,6 +30,16 @@ public struct S2ArmShellHostView: View {
                 if s2a_shell_take_open_settings() != 0 { DispatchQueue.main.async { NotificationCenter.default.post(name: .shellOpenSettings, object: nil) } }
             }
             .onDisappear { model.stopControllers() }
+            .sheet(isPresented: Binding(get: { model.managingStorage }, set: { model.managingStorage = $0 }), onDismiss: { model.storageGameID = nil; model.refreshGameData(); model.startControllers() }) {
+                if let id = model.storageGameID {
+                    S2ArmGameDeletionView(gameID: id, title: model.deletionTitle, root: S2ArmStorage.liveRoot,
+                                          initialDeleteSaves: model.deletionIncludesSaves,
+                                          onDeleted: { model.finishGameDeletion($0) })
+                } else {
+                    S2ArmStorageView(names: Dictionary(model.games.map { ($0.id, $0.game.title) }, uniquingKeysWith: { a, _ in a }),
+                                     root: S2ArmStorage.liveRoot)
+                }
+            }
             // 库顶上的提示：这次安装丢了「提高内存上限」权限（可关，只管这次打开；「了解详情」看各装法怎么带上）；删除游戏的进度与结果（点一下收起结果）
             .overlay(alignment: .top) {
                 VStack(spacing: 10) {
@@ -58,7 +68,10 @@ public struct S2ArmShellHostView: View {
             .animation(.smooth(duration: 0.25), value: model.guideOpen)
         #if canImport(UIKit) && !os(tvOS)
             // 回前台重判资源包：玩家去「文件」/ 访达拷完资源包回来，不用重开 App
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.rescanCatalogue() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                model.rescanCatalogue()
+                if model.backgroundTaskMessage == nil { model.refreshGameDataInBackground() }
+            }
             // 虚拟手柄布局编辑页（设置里「按键布局 → 调整位置…」）：盖在库界面上，关了回到设置
             .overlay {
                 if let id = model.editingLayout {
@@ -69,6 +82,23 @@ public struct S2ArmShellHostView: View {
                 if let id = model.editingIdentity {
                     S2ArmGameIdentityView(title: model.identityName(id), initialName: model.identityName(id), hasCustom: model.hasCustomIdentity(id), error: model.identityError,
                                           save: { model.saveIdentity(id, name: $0, cover: $1) }, reset: { model.resetIdentity(id) }, close: { model.closeIdentityEditor(id) })
+                }
+                if let msg = model.backgroundTaskMessage {
+                    ZStack {
+                        Color.black.opacity(0.45).ignoresSafeArea()
+                        VStack(spacing: 14) {
+                            ProgressView()
+                                .controlSize(.large)
+                                .tint(.white)
+                            Text(msg)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 22)
+                        .background(Color(white: 0.14).opacity(0.95), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .accessibilityIdentifier("s2arm.background.progress")
                 }
             }
         #elseif os(tvOS)
@@ -175,14 +205,14 @@ final class LibraryHostingController<Content: View>: UIHostingController<Content
 @MainActor @_cdecl("s2a_shell_library_vc")
 public func s2a_shell_library_vc(_ cataloguePath: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer {
     let path = cataloguePath.map { String(cString: $0) } ?? ""
-    let model = S2ArmShellHostModel(catalogue: Catalogue.load(path: path), reloadCatalogue: { Catalogue.load(path: path) })
+    let model = S2ArmShellHostModel(catalogue: Catalogue.load(path: path), reloadCatalogue: { Catalogue.load(path: path) }, deferInitialRefresh: true)
     // 宿主「重新检查」/ 后台解包完成 → 重判资源包。登记给 C 的是不持有的指针，所以由 g_refreshModel 强持有当前这份模型：
     //   原先假定「vc 由 app.m 持有到进程结束」，可开游戏时 window.rootViewController 换成游戏页，库的 vc 与模型随之释放，
     //   游戏里后台解包完成再回调就是用已释放的模型（11-14 诊断#7f30f6：refreshGameData+0x9c 读 0x10）。再建库页时换成新的那份，只留一个
     g_refreshModel = model
     s2a_shell_set_refresh_handler({ ctx in
         guard let ctx else { return }
-        MainActor.assumeIsolated { Unmanaged<S2ArmShellHostModel>.fromOpaque(ctx).takeUnretainedValue().refreshGameData() }
+        MainActor.assumeIsolated { Unmanaged<S2ArmShellHostModel>.fromOpaque(ctx).takeUnretainedValue().refreshGameDataInBackground() }
     }, Unmanaged.passUnretained(model).toOpaque())
     let vc = LibraryHostingController(rootView: S2ArmShellHostView(model: model))
     return Unmanaged.passRetained(vc as UIViewController).toOpaque()

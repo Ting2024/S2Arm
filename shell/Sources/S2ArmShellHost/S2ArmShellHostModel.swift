@@ -21,7 +21,8 @@ public final class S2ArmShellHostModel {
     public private(set) var input = ShellInputLog()
     public private(set) var padSnapshot: PadSnapshot?
     @ObservationIgnored private let adapter = GamepadAdapter()
-    @ObservationIgnored private let play: (String) -> Void
+    @ObservationIgnored private let play: ((String) -> Void)?
+    @ObservationIgnored private let usePreviewDeletion: Bool
     /// 本款装机阶段（宿主按 Documents/games/<游戏号> 判，见 s2a_shell.h）：1 就绪 / 2 传完待解开 / 3 传输中 / 0 没有（不显示）
     @ObservationIgnored private let installState: (String) -> Int32
     /// 这款程序按别的宿主约定号出、要在电脑上按新版更新（s2a_shell_game_needs_host_update：宿主每款读一次清单后缓存，点开被拒的也记上）
@@ -60,11 +61,21 @@ public final class S2ArmShellHostModel {
     @ObservationIgnored private let stores: S2ArmGameSettings.Stores
     @ObservationIgnored private let layoutState: (String) -> S2ArmGameSettings.LayoutState
     /// 正在调整虚拟手柄布局的那款（非空时宿主视图盖上编辑页）
+    public var managingStorage = false
+    public var storageGameID: String?
+    public var deletionIncludesSaves = false
+    public var deletionTitle = ""
+    @ObservationIgnored private let abandonedStore: UserDefaults
+    @ObservationIgnored private let storageRoot: URL
+    private let abandonedKey = "S2ArmAbandonedUploadGames.v1"
     public var editingLayout: String?
     /// 正在改名字和封面的那款（非空时宿主视图盖上编辑页）
     public var editingIdentity: String?
     /// 编辑页上次点保存没存成的原因（存成 / 关页清掉）
     public private(set) var identityError: String?
+    /// 后台任务进度文案（非空时在库界面上盖进度窗口，避免未完成后台扫描期间界面看似卡死无响应）
+    public var backgroundTaskMessage: String?
+    @ObservationIgnored private var refreshWorker: Task<Void, Never>?
     @ObservationIgnored private let identityStore: GameIdentityStore
     /// 清单里写的条目：恢复默认时回到它
     @ObservationIgnored private var listedTiles: [String: GameTile] = [:]
@@ -86,27 +97,41 @@ public final class S2ArmShellHostModel {
                 layoutState: @escaping (String) -> S2ArmGameSettings.LayoutState = S2ArmGameSettings.layoutState,
                 installState: ((String) -> Int32)? = nil, installGame: ((String) -> Bool)? = nil, installProgress: ((String) -> (Int, Int)?)? = nil,
                 installPhase: ((String) -> (Int, Double?)?)? = nil, installFailure: ((String) -> String?)? = nil, installWait: (() -> Int32)? = nil,
-                now: @escaping () -> Date = Date.init, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
-                gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil,
+                now: @escaping () -> Date = Date.init, gameDataReady: ((String) -> Bool)? = nil,
+                pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
+                abandonedStore: UserDefaults? = nil, storageRoot: URL? = nil,
+                gamesRoot: URL? = nil, packGamesRoot: URL? = nil,
                 imlNotice: (() -> String?)? = nil, needsHostUpdate: ((String) -> Bool)? = nil, needsReinstall: ((String) -> Bool)? = nil,
-                reloadCatalogue: (() -> Catalogue)? = nil) {
+                reloadCatalogue: (() -> Catalogue)? = nil,
+                deferInitialRefresh: Bool = false) {
         self.reloadCatalogue = reloadCatalogue
-        self.gamesRoot = gamesRoot
-        self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: gamesRoot)
+        let resolvedStorageRoot = storageRoot ?? S2ArmStorage.liveRoot
+        let resolvedGamesRoot = gamesRoot ?? (storageRoot != nil ? resolvedStorageRoot.appendingPathComponent("Documents/games") : S2ArmContainer.gamesRoot())
+        self.storageRoot = resolvedStorageRoot
+        self.abandonedStore = abandonedStore ?? .standard
+        self.usePreviewDeletion = abandonedStore != nil || storageRoot != nil
+        self.gamesRoot = resolvedGamesRoot
+        self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: resolvedGamesRoot, home: resolvedStorageRoot)
         self.stores = stores; self.layoutState = layoutState; bannerURLs = catalogue.bannerURLs
         playerStore = LocalPlayers(shellDefaults: stores.app)
         players = playerStore.all; currentPlayer = playerStore.current
         self.identityStore = identityStore
         listedTiles = Dictionary(catalogue.tiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         listedBanners = catalogue.bannerURLs
-        let strays = Self.otherComputerGames(gamesRoot, packRoot: self.packGamesRoot, listed: Set(catalogue.tiles.map(\.id)))
+        let strays = Self.otherComputerGames(self.gamesRoot, packRoot: self.packGamesRoot, listed: Set(catalogue.tiles.map(\.id)))
         allGames = catalogue.tiles.map { tile in
             var state = layoutState(tile.id); state.customIdentity = identityStore.load(tile.id) != nil
             return GameDetail(game: tile, sections: S2ArmGameSettings.sections(for: tile.id, stores: stores, state: state))
         } + strays.map { GameDetail(game: $0) }
         listedStates = Dictionary((catalogue.tiles + strays).map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
-        self.play = play ?? { id in _ = id.withCString { s2a_shell_play($0) } }
-        self.installState = installState ?? { id in id.withCString { s2a_shell_game_install_state($0) } }
+        self.play = play
+        if let installState {
+            self.installState = installState
+        } else if let gameDataReady {
+            self.installState = { id in gameDataReady(id) ? 1 : 0 }
+        } else {
+            self.installState = { id in id.withCString { s2a_shell_game_install_state($0) } }
+        }
         self.needsHostUpdate = needsHostUpdate ?? { id in id.withCString { s2a_shell_game_needs_host_update($0) } != 0 }
         self.needsReinstall = needsReinstall ?? { id in id.withCString { s2a_shell_game_needs_reinstall($0) } != 0 }
         self.installGame = installGame ?? { id in id.withCString { s2a_shell_install_game($0) } != 0 }
@@ -130,10 +155,14 @@ public final class S2ArmShellHostModel {
         } + remaining
         for tile in catalogue.tiles { applyIdentity(tile.id) }
         for p in catalogue.problems { NSLog("S2Arm 游戏库：%@", p) }
-        Self.sweepDeleting(gamesRoot)
+        Self.sweepDeleting(self.gamesRoot)
         let json = imlNotice.map { $0() } ?? { guard let p = s2a_shell_iml_notice() else { return nil }; defer { free(p) }; return String(cString: p) }()
         self.imlNotice = Self.imlNotice(json: json)
-        refreshGameData()
+        if deferInitialRefresh {
+            refreshGameDataInBackground()
+        } else {
+            refreshGameData()
+        }
         // 测试开关（真机自动化要 XCTest 触控 ID 授权、人不在时点不进去；同 diag.m S2A_OPEN_SETTINGS，环境变量只有 devicectl / Xcode 起 App 能给，玩家碰不到）：
         //   S2A_SHELL_OPEN_LAYOUT_EDITOR=<游戏号> 起来直接盖上这款的「调整位置」编辑页
         //   S2A_SHELL_PLAY=<游戏号> 起来 2 秒后替人点这款的 Play（走同一条 requestPlay → C 出口；截图局别带 S2A_AUTOPLAY=1：没有视觉驾驶员时自动玩家判卡住、优雅退出）
@@ -207,9 +236,30 @@ public final class S2ArmShellHostModel {
         refreshGameData()
     }
 
+    /// 后台线程异步重判资源包，并在有后台任务未完成时显示进度窗口，避免主线程卡死无响应
+    public func refreshGameDataInBackground() {
+        refreshWorker?.cancel()
+        backgroundTaskMessage = shellText("Checking game data status…")
+        stopControllers()
+        refreshWorker = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            self.refreshGameData()
+            self.backgroundTaskMessage = nil
+            self.refreshWorker = nil
+            self.startControllers()
+        }
+    }
+
     public func refreshGameData() {
+        refreshWorker?.cancel()
+        refreshWorker = nil
+        backgroundTaskMessage = nil
+        var hidden = Set(abandonedStore.stringArray(forKey: abandonedKey) ?? [])
+        let previouslyHidden = hidden
         var missing = Set<String>(), ledgerChanged = false
         defer {
+            if hidden != previouslyHidden { abandonedStore.set(Array(hidden).sorted(), forKey: abandonedKey) }
             if ledgerChanged { saveLedger() }
             if missing != notOnDevice { notOnDevice = missing; NSLog("S2Arm 游戏库：这台设备上 %d / %d 款可显示", allGames.count - missing.count, allGames.count) }
             exportWidget()   // 主屏小组件的数据（WidgetExport.swift）：内容变了才写
@@ -217,17 +267,24 @@ public final class S2ArmShellHostModel {
         }
         for i in allGames.indices {
             let id = allGames[i].id, listed = listedStates[id] ?? allGames[i].game.state
+            let stateCode = installState(id)
+            if hidden.contains(id) {
+                let incoming = try? S2ArmUploadCleanup.preview(root: storageRoot, gameID: id, archived: false)
+                if stateCode != 0 || incoming?.files.isEmpty == false {
+                    hidden.remove(id)
+                }
+            }
             let want: GameState
-            switch installState(id) {
+            switch stateCode {
             case 1, 4: want = listed != .playable ? listed : needsReinstall(id) || needsHostUpdate(id) ? .needsGameUpdate : listed; installTried.remove(id)   // 程序约定号对不上本宿主、签名或文件对不上本机这份 App：都标「需要在电脑上更新」（修法同一个：电脑上对这款再装一次），点开只展开说明；4 = 只缺非核心文件：库里照样可玩，点开始时宿主问一次「仍要启动」（v0.3.1）
             case 2: want = .installing(unpackStage(id))
             case 3: want = .installing(transferStage(id))   // 断了也接着看：电脑重新插上续传时字节又涨
             default:   // 资源不在：玩家删掉的不显示；没删过的留在库里显示「需要游戏数据」，Play 点到只给导入说明，不放行（审计 P1-155）
-                if isRemoved(id) { missing.insert(id) }
+                if isRemoved(id) || hidden.contains(id) { missing.insert(id) }
                 want = listed == .playable ? .needsGameData : listed
             }
-            if installState(id) != 0, mark(id, "present", program: Self.programID(gamesRoot, id)) { ledgerChanged = true }   // 这款资源在（或正在装）：记「在」；删过的又回来了（电脑重装）也改回「在」
-            noteDataSize(i, ready: [1, 4].contains(installState(id)))
+            if stateCode != 0, mark(id, "present", program: Self.programID(gamesRoot, id)) { ledgerChanged = true }   // 这款资源在（或正在装）：记「在」；删过的又回来了（电脑重装）也改回「在」
+            noteDataSize(i, ready: [1, 4].contains(stateCode))
             let fresh = want == .playable && isFresh(id)
             if allGames[i].game.isNew != fresh { allGames[i].game.isNew = fresh }
             let played = playtimeLine(id)   // 游玩时间（11-15 维护者）：有就进「最近玩过」与这款的那一行，没玩过不显示
@@ -381,16 +438,45 @@ public final class S2ArmShellHostModel {
                      onPickGameData: { [weak self] id in self?.requestGameData(id) },
                      onPickShellCloud: Self.pickCloudFolder, onClearShellCloud: Self.pickCloudFolder == nil ? nil : { CloudSaves.forget() },
                      onButtonTest: { [weak self] open in self?.buttonTest(open) },
-                     onDeleteGame: { [weak self] id, saves in self?.deleteGame(id, saves: saves) },
+                     onDeleteGame: { [weak self] id, saves in
+                         guard let self else { return }
+                         if self.usePreviewDeletion {
+                             self.requestGameDeletion(id, deleteSaves: saves)
+                         } else {
+                             self.deleteGame(id, saves: saves)
+                         }
+                     },
                      onManageSaves: { [weak self] id in self?.manageSaves(id) })
         actions.onReorderGames = { [weak self] sources, before in self?.reorderGames(sources, before: before) ?? false }
-        actions.onReportProblem = { s2a_shell_report_problem() }
+        actions.onManageStorage = { [weak self] in self?.openStorage() }
+        actions.onReportProblem = { s2a_shell_report_problem() }   // 故障报修（宿主 ios/diag.m：可不填的一句说明 + 打包上传、给短码）
         // 快照（0.6.0）：有完整快照的那款，长按卡片多一项「回到上次存下的这一刻」（宿主 ios/app.m；开关关着时宿主回 0，菜单里没有这一项）
         actions.snapshotAvailable = { id in s2a_shell_snapshot_available(id) != 0 }
         actions.onRestoreSnapshot = { [weak self] id in
             guard let self, let g = self.allGames.first(where: { $0.id == id }), g.game.state == .playable else { return }
-            s2a_shell_restore_snapshot(id) }   // 故障报修（宿主 ios/diag.m：可不填的一句说明 + 打包上传、给短码）
+            s2a_shell_restore_snapshot(id) }
         return actions
+    }
+
+    public func openStorage() {
+        guard !managingStorage else { return }
+        storageGameID = nil; managingStorage = true; stopControllers()
+    }
+
+    public func requestGameDeletion(_ id: String, deleteSaves: Bool) {
+        guard !managingStorage, games.contains(where: { $0.id == id }), isTitleID(id) else { return }
+        // Exact scope is previewed and confirmed in a dedicated sheet.
+        deletionTitle = identityName(id)
+        deletionIncludesSaves = deleteSaves
+        storageGameID = id; managingStorage = true; stopControllers()
+    }
+
+    public func finishGameDeletion(_ id: String) {
+        guard managingStorage, storageGameID == id else { return }
+        // Called only after the deletion service reports full completion.
+        var hidden = Set(abandonedStore.stringArray(forKey: abandonedKey) ?? [])
+        hidden.insert(id); abandonedStore.set(Array(hidden).sorted(), forKey: abandonedKey)
+        notOnDevice.insert(id)
     }
 
     /// Native reordering supplies stable IDs and an insertion point after the drag finishes.
@@ -429,6 +515,7 @@ public final class S2ArmShellHostModel {
     }
 
     public func requestPlay(_ id: String) {
+        guard !managingStorage else { return }
         if allGames.first(where: { $0.id == id })?.game.state.installPhase == .failed { installTried.remove(id) }   // 「安装没完成」点重试：再解一次
         refreshGameData()
         if allGames.first(where: { $0.id == id })?.game.state == .needsGameData { requestGameData(id); return }
@@ -438,7 +525,8 @@ public final class S2ArmShellHostModel {
         }
         try? Data().write(to: gamesRoot.appendingPathComponent(id).appendingPathComponent(Self.playedMark))   // 点开过：蓝点消掉
         if let i = allGames.firstIndex(where: { $0.id == id }) { allGames[i].game.isNew = false }
-        play(id)
+        if let play { play(id); return }
+        _ = id.withCString { s2a_shell_play($0) }
     }
 
     /// 存档在这款数据根下的 S2A/（Ryujinx 数据根 <文档根>/S2A/ryujinx，存档 bis/user/save，同 pack/jobs/install.py SAVE_REL）
@@ -617,10 +705,11 @@ public final class S2ArmShellHostModel {
     }
 
     /// 「需要游戏数据」那款：交宿主给导入说明（宿主「重新检查」后经 s2a_shell_refresh 回到 refreshGameData）
-    public func requestGameData(_ id: String) { pickGameData(id) }
+    public func requestGameData(_ id: String) { if !managingStorage { pickGameData(id) } }
 
     /// 设置行改了：存下、刷新这一款的设置行；选「调整位置…」打开编辑页
     public func change(_ id: String, _ setting: String, _ value: String) {
+        guard !managingStorage else { return }
         if setting == S2ArmGameSettings.identity {
             if value == S2ArmGameSettings.editIdentity { editingIdentity = id; identityError = nil }
             refresh(id)
@@ -720,6 +809,7 @@ public final class S2ArmShellHostModel {
     }
 
     public func startControllers() {
+        guard !managingStorage else { return }
         adapter.onInput = { [weak self] action, device in
             guard let self else { return }
             if self.guideOpen { self.guideInput(action); return }   // 引导盖着库界面：手柄只管引导

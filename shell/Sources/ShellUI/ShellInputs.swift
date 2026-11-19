@@ -274,6 +274,7 @@ public struct ShellActions {
     public var onClearShellData: (() -> Void)?
     public var onClearShellCloud: (() -> Void)?
     /// S2Arm: settings → "Report a problem" (the host packs the logs, uploads them and shows a short code). Nil hides the row.
+    public var onManageStorage: (() -> Void)?
     public var onReportProblem: (() -> Void)?
     public var onGlobalPadMapChange: ((String, String) -> Void)?
     public var onGlobalPadMapReset: (() -> Void)?

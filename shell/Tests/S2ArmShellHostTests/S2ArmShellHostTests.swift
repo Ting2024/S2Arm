@@ -610,6 +610,63 @@ nonisolated(unsafe) private var lastPlayed = ""
     #expect(O.parse(#"{"fps":{"on":false},"fullscreen":{"on":false}}"#)?.volume == nil)
 }
 
+@MainActor @Test func storageModeBlocksPlayAndImportUntilDismissed() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let data = Data(#"{"schema":1,"games":[{"title_id":"0100000000010000","name":"A"},{"title_id":"0100000000020000","name":"B","state":"needs_game_data"}]}"#.utf8)
+    var played: [String] = [], picked: [String] = []
+    var readinessChecks = 0
+    let model = S2ArmShellHostModel(catalogue: Catalogue.parse(data, baseDirectory: root),
+        play: { played.append($0) }, gameDataReady: { _ in readinessChecks += 1; return true },
+        pickGameData: { picked.append($0) }, identityStore: GameIdentityStore(root: root))
+    let initialChecks = readinessChecks
+    model.managingStorage = true
+    model.actions.onPlay("0100000000010000")
+    model.actions.onPlay("0100000000020000")
+    model.actions.onPickGameData("0100000000020000")
+    model.requestPlay("0100000000010000") // Same path used by delayed automatic request.
+    model.requestGameData("0100000000020000")
+    #expect(played.isEmpty && picked.isEmpty && readinessChecks == initialChecks)
+    model.managingStorage = false
+    model.actions.onPlay("0100000000010000")
+    model.actions.onPickGameData("0100000000020000")
+    #expect(played == ["0100000000010000"] && picked == ["0100000000020000"])
+}
+
+@MainActor @Test func unfinishedGameDeletionRequiresCleanupAndPersistsUntilNewUpload() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("delete-game-" + UUID().uuidString)
+    let suite = "s2a.delete-game-test." + UUID().uuidString
+    let preferences = try #require(UserDefaults(suiteName: suite))
+    defer { preferences.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+    let id = "0400486024DEC000"
+    let catalogue = Catalogue.parse(Data("{\"schema\":1,\"games\":[{\"title_id\":\"\(id)\",\"name\":\"Unfinished\"}]}".utf8), baseDirectory: root)
+    let incoming = root.appendingPathComponent("Documents/games/\(id)/资源包/.incoming")
+    try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+    let archive = incoming.appendingPathComponent("1794243803_000.tar")
+    try Data(repeating: 7, count: 200).write(to: archive)
+    func model() -> S2ArmShellHostModel {
+        S2ArmShellHostModel(catalogue: catalogue, play: { _ in Issue.record("Must not launch") },
+            gameDataReady: { _ in false }, identityStore: GameIdentityStore(root: root.appendingPathComponent("Documents")),
+            abandonedStore: preferences, storageRoot: root)
+    }
+    let first = model()
+    first.actions.onDeleteGame?(id, true)
+    #expect(first.managingStorage && first.storageGameID == id)
+    #expect(try Data(contentsOf: archive).count == 200) // First dialog never deletes.
+    #expect(first.games.count == 1 && first.deletionIncludesSaves) // Callback opens preview, never deletes.
+    let preview = try S2ArmGameDeletion.preview(root: root, gameID: id, deleteSaves: first.deletionIncludesSaves)
+    let result = try S2ArmGameDeletion.delete(root: root, preview: preview, transportStopped: true)
+    #expect(result.complete)
+    first.finishGameDeletion(id)
+    #expect(first.games.isEmpty)
+    let reopened = model()
+    #expect(reopened.games.isEmpty)
+    try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+    try Data(repeating: 8, count: 100).write(to: incoming.appendingPathComponent("1794243804_000.tar"))
+    reopened.refreshGameData()
+    #expect(reopened.games.map(\.id) == [id]) // New upload restores rather than permanently hiding it.
+}
+
 // 游戏语言（#1252，同游戏内设置页）：宿主给了 language 才出「语言」一组；当前值不在选项里按跟随系统；宿主那句「这款不支持 X」接在说明后；改值交宿主（种类 language、键 = 枚举名）。期望手算
 @MainActor @Test func gameSettingsLanguage() throws {
     typealias O = S2ArmGameSettings.Options
