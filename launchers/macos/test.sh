@@ -41,3 +41,8 @@ python3 launchers/macos/check_xctest.py build/macos/tests/frontend-discovery.log
 [ "$frontend_rc" = 0 ] || exit "$frontend_rc"
 # 原生输入（input_test.m）与系统键盘桥接（textinput_test.m）的 C / ObjC 单测挪到 tests/macos_native_input_test.sh（合入前层、按依赖文件路由；
 #   11-10：#417 Joy-Con 体感改走 HID 后 input_test 漏链 joycon_imu.m，这里只在合入后层跑，守望才发现）
+# Actual Mac LAN provider link/lifecycle; never starts Bonjour or touches devices.
+xcrun clang -fobjc-arc -O1 -Wall -Wextra -Wno-unused-parameter -Iruntime/include -Iruntime/src \
+  runtime/tests/t_mac_lan_link.m ios/ldn_lan.m macos/lan_permission.m runtime/src/lan_elect.c \
+  -o build/macos/tests/mac-lan-link -framework Foundation -framework AppKit
+build/macos/tests/mac-lan-link

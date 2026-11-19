@@ -472,6 +472,8 @@ def compile_host(c, fingerprint, env, log_root):
                  CFBundleExecutable="s2arm-host", CFBundlePackageType="APPL", LSMinimumSystemVersion="15.0",
                  NSBluetoothAlwaysUsageDescription="连接 Switch 2 Pro 手柄，接收按键与体感并发送游戏震动。",  # 非玩家句
                  NSHighResolutionCapable=True, LSSupportsGameMode=False,
+                 NSLocalNetworkUsageDescription="本地联机：与同一局域网下的其他设备互相发现、进同一个房间。",  # 非玩家句
+                 NSBonjourServices=["_s2arm-ldn._tcp"],
                  LSApplicationCategoryType="public.app-category.games")
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist))
     c.run(["codesign", "--force", "--sign", "-", app], log_root / "sign.log", env)

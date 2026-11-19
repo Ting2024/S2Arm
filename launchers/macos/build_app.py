@@ -283,6 +283,9 @@ def main():
                 **release_identity(resources / "Engine/engine.json"))
     # Sparkle：appcast 地址、验签公钥（Ed25519，私钥只在发版机 ~/.s2arm/.secrets/sparkle_ed25519）；不开定时检查（查新版走启动时的公告 / 消息）
     info.update(SUFeedURL=SPARKLE_FEED, SUPublicEDKey=SPARKLE_PUBLIC_KEY, SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False)
+    # macOS can attribute a launched child's local-network request to this launcher.
+    info["NSLocalNetworkUsageDescription"] = "本地联机：与同一局域网下的其他设备互相发现、进同一个房间。"
+    info["NSBonjourServices"] = ["_s2arm-ldn._tcp"]
     info["UTExportedTypeDeclarations"] = [dict(UTTypeIdentifier="org.s2arm.save-backup", UTTypeDescription="S2Arm Save Backup",
         UTTypeConformsTo=["public.zip-archive"], UTTypeTagSpecification={"public.filename-extension": ["s2asave"]})]
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
