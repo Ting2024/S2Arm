@@ -624,6 +624,15 @@ namespace S2A.Services
         private static Dispatcher BootCore(IRenderer renderer, IHardwareDeviceDriver audio, string baseDir,
             HostConfiguration configuration, Action<Exception> serviceFailure)
         {
+            // Validate before creating any directories or AccountManager profiles.
+            // Explicit platform configuration never inherits launcher environment.
+            LauncherAccount launcherAccount = configuration != null ? configuration.Account :
+                LauncherAccount.Parse(Environment.GetEnvironmentVariable("S2A_SESSION_USER"));
+            launcherAccount?.ValidateRoot(configuration?.SaveDirectory ?? baseDir);
+            if (launcherAccount != null && configuration == null &&
+                !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("S2A_SAVE_DIR")))
+                throw new ArgumentException("Launcher accounts cannot be combined with destructive save seeds");
+
             // 带配置的会话只用平台登记的读数：没给就是「取不到」（-1），不落到苹果 libSystem（#1073）
             MemDiag.FootprintProvider = configuration == null ? null : configuration.MemoryFootprint ?? (() => -1);
             MemDiag.Startup();   // 起局一行 GC 配置 / 进程内存；S2A_MEMPROBE=1 时先做托管内存上限探测
@@ -741,6 +750,7 @@ namespace S2A.Services
             ContentManager content = new(vfs);
             content.LoadEntries(); // Ryujinx 界面启动时做的一步；不做则 Horizon 服务（ngc 等）挂载系统数据时查不到存储位置而崩
             AccountManager account = new(libHac.RyujinxClient, null);
+            launcherAccount?.Apply(account);
             UserChannelPersistence channel = Channel;   // 进程级，跨重启存活（见 Channel）
 
             if (LdnServer == "lan") StartLanDiscovery();

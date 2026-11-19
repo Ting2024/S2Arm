@@ -127,6 +127,11 @@ import AppKit
         XCTAssertEqual(preview.notice,notice)
         // notice 只是给人看的：恢复请求仍旧只带那三项校验值
         XCTAssertEqual(Set(preview.request.keys),["archiveSha256","targetFingerprint","previewLibraryId"])
+        var bound=body
+        bound["previewUserBinding"]=String(repeating:"c",count:64)
+        let captured=try XCTUnwrap(Store.decode(SavePreview.self,bound))
+        XCTAssertEqual(captured.request["previewUserBinding"] as? String,String(repeating:"c",count:64))
+        XCTAssertNil(captured.request["notice"])
         var legacy=body
         legacy.removeValue(forKey:"notice")
         let old=try XCTUnwrap(Store.decode(SavePreview.self,legacy))

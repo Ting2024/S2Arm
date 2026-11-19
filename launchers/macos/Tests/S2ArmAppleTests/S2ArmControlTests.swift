@@ -46,6 +46,7 @@ import AppKit
         do { let c = await post("/fonts", ["path": ""]).0; XCTAssertEqual(c, 409) }
         do { let c = await post("/onboarding", ["action": "finish"]).0; XCTAssertEqual(c, 200, "新界面没有引导页：忽略、不报错（旧剧本照跑）") }
         do { let c = await post("/nope").0; XCTAssertEqual(c, 404) }
+        XCTAssertNil(model.playSession)
         XCTAssertNil(model.session, "上面这些一个作业都没起")
     }
 
@@ -64,7 +65,7 @@ import AppKit
             .write(to: root.appendingPathComponent("logs/jobs/t1.json"))
         let s = control.state()
         for k in ["selection", "showOnboarding", "onboardingStep", "keyStatus", "hasImportedKeys", "environmentReady", "checkingEnvironment",
-                  "checks", "games", "tasks", "queue", "notice", "error", "installReadiness", "waitingForAccess", "cachedAt", "windows", "overlays"] {
+                  "checks", "games", "tasks", "playSession", "playingGameId", "queue", "notice", "error", "installReadiness", "waitingForAccess", "cachedAt", "windows", "overlays"] {
             XCTAssertNotNil(s[k], k)
         }
         let t = (s["tasks"] as? [[String: Any]])?.first

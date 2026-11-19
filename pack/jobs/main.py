@@ -46,6 +46,7 @@ import winproc
 import saves
 import sgrade
 import sizes
+import users
 import target
 import toolchain
 from core import (KEEP_DAYS, KEEP_FAILED_PER_OPERATION, KEEP_PER_OPERATION, KEEP_TOTAL, Cancelled, Context, Failure, Paused, TERMINAL_STATES, cancel, describe, journal, pid_alive, prune_jobs,
@@ -109,6 +110,7 @@ def run_request(request_path, *, context_class=Context, operation_overrides=None
                   "pushSelected": install.push_selected,
                   "signModeSet": install.sign_mode_set,
                   "saveStatus": saves.status, "saveBackup": saves.backup, "saveInspect": saves.inspect, "saveRestore": saves.restore,
+                  "users": users.listing, "userUpdate": users.update,
                   "community": community.listing, "communitySave": community.save, "patchMatch": patches.match, "sgradeScan": sgrade.scan, "sgradeUpgradeGame": sgrade.upgrade_one, "sgradeUpgradeBatch": sgrade.upgrade_batch, "sgradeUpgradeStop": sgrade.upgrade_stop, "sgradeUpgradeStatus": sgrade.upgrade_status, "updateHints": host_update.update_hints, "phoneOverview": host_update.phone_overview, "sgradeMac": sgrade.mac_all, "sgradeReenable": sgrade.reenable, "devCert": devcert.operation, "export": export_plan.export}
     if operation_overrides:
         operations.update(operation_overrides)
@@ -117,7 +119,7 @@ def run_request(request_path, *, context_class=Context, operation_overrides=None
             raise Failure("不支持的任务类型。")
         if c.operation == "import" and c.r.get("partialResults") is True:   # 默认路径不带 sources（结果与任务记录同 #124 之前）
             c.import_result = library.initial_import_result(c)
-        if c.operation not in saves.OPERATIONS and c.operation not in ORCHESTRATION:
+        if c.operation not in saves.OPERATIONS | {"users", "userUpdate", "devCert", "installMode"} and c.operation not in ORCHESTRATION:
             embedded.install(c)
         if c.operation not in NO_LIBRARY:
             layout.ensure(c)   # 旧布局的库先一次性整理成新结构（layout.py），之后各作业只按新布局找路径
@@ -249,7 +251,7 @@ def background_priority():
 KEEP_AWAKE = ("build", "ipa", "install", "installUpdate", "installRestore", "exportPush", "tvInstall", "tvExport")   # 出包 / 推送期间电脑不空闲休眠（awake.py；v0.3.1 玩家推大包被休眠打断成「传输中断」）
 HEAL_AFTER = ("import", "build", "ipa")   # 结束时顺手把还叫游戏号的文件夹改英文名（layout.heal_folder_names）
 ORCHESTRATION = ("export",)   # 只起子作业的编排：引擎副本、游戏库结构由每一步的子作业自己核（剃刀 H13）
-NO_LIBRARY = ORCHESTRATION + ("preflight", "prepareEngine", "downloadMetal", "downloadIosPlatform", "installDotnet", "targetDevice", "setup", "signingProject", "devCert", "appleLogin", "appleAccount")
+NO_LIBRARY = ORCHESTRATION + ("preflight", "prepareEngine", "downloadMetal", "downloadIosPlatform", "installDotnet", "targetDevice", "setup", "signingProject", "devCert", "appleLogin", "appleAccount", "users", "userUpdate")
 
 
 def parser():

@@ -7,6 +7,11 @@ using S2A.Services;
 
 Ryujinx.HLE.FileSystem.S2AHostFileSystem.Transaction = new S2A.Apple.SaveCommit.AppleHostDirectoryTransaction();
 
+if (args.Length == 1 && args[0] == "--session-binding")
+{
+    SaveTransfer.TestSessionBinding();
+    return;
+}
 if (args.Length == 2 && args[0] == "--request")
 {
     Console.WriteLine(SaveTransfer.Execute(File.ReadAllText(args[1])));

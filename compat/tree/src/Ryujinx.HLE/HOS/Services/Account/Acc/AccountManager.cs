@@ -269,9 +269,23 @@ namespace Ryujinx.HLE.HOS.Services.Account.Acc
             _storedOpenedUsers = _profiles.Values.Where(x => x.AccountState == AccountState.Open).ToArray();
         }
 
+        // Explicit launcher selection is session-local; no global hook and no
+        // deletion of the runtime's default profile or its save data.
+        private UserProfile _sessionUser;
+
+        public void SelectSessionUser(UserId userId)
+        {
+            if (!_profiles.TryGetValue(userId.ToString(), out UserProfile profile))
+                throw new System.ArgumentException("Session account does not exist");
+            OpenUser(userId);
+            _sessionUser = profile;
+        }
+
         internal UserProfile GetFirst()
         {
-            return _profiles.First().Value;
+            // acc:u0 51/52 must not pick an arbitrary dictionary entry when the
+            // launcher explicitly selected another user. Legacy behavior stays.
+            return _sessionUser ?? _profiles.First().Value;
         }
     }
 }

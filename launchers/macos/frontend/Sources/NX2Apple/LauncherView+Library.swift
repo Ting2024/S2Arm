@@ -146,6 +146,7 @@ extension LauncherView {
 
     /// 卡片和大图上的状态：两端都算（原作者只看 Mac 版）。
     func statusLine(_ game: GameSummary) -> (text: String, color: Color) {
+        if model.isPlaying(gameID: game.id) { return (loc.t("s2arm.library.running"), LauncherPalette.building) }
         if model.mainBusy && model.session?.gameID == game.id {
             return (loc.t(model.session?.kind == .play ? "s2arm.library.running" : "s2arm.job.running"), LauncherPalette.building)
         }

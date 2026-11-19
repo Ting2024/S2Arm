@@ -19,6 +19,12 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
+struct SaveTarget: Identifiable {
+    let id = UUID()
+    let gameID: String
+    let user: LauncherUser
+}
+
 struct LauncherView: View {
     @ObservedObject var model: S2ArmLauncherModel
     @ObservedObject var home: HomeLibraryState
@@ -74,6 +80,23 @@ struct LauncherView: View {
             noticeBar
             phoneUpdateBar
             libraryNoticeBar
+            ForEach(model.playSessions) { session in
+                let play = session.job
+                HStack {
+                    Image(systemName: "gamecontroller")
+                    Text(play.name + " · " + session.user.id + " " + session.user.name).font(.manrope(13, .semibold))
+                    Text(loc.backend(play.stage)).font(.manrope(12)).foregroundStyle(.secondary)
+                    Spacer()
+                    if case .finished = play.phase {
+                        Text(loc.backend(play.message)).font(.manrope(12)).lineLimit(2)
+                        Button(loc.t("s2arm.play.back")) { model.dismissPlayResult(id: session.id) }
+                    } else {
+                        Button(loc.t("s2arm.play.stop")) { model.stopPlay(id: session.id) }
+                            .disabled(play.phase == .stopping)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 10)
+            }
             if model.batchShown {
                 BatchExportView(model: model, covers: covers, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
             } else if let result = model.viewingResult, let run = result.export {
@@ -179,6 +202,7 @@ struct LauncherView: View {
             Button(txt("phone.drop.cancel"), role: .cancel) { model.libraryConfirm = nil }
         } message: { Text(loc.backend(model.libraryConfirm?.message ?? "")) }
         .sheet(isPresented: $model.showAddGames) { ImportSheet(model: model, kind: .games).environmentObject(loc) }
+        .sheet(isPresented: $model.showUsers) { UserManagementSheet(model: model).environmentObject(loc) }
         // 打开时最多一个更新弹窗（有新版 / 这版更新了什么），只给最新一期；关掉（含 Esc）= 这一版不再弹
         .sheet(isPresented: Binding(get: { model.updatePopup != nil && !model.showAddGames && !model.showKeys && !model.showEnvironment }, set: { if !$0, model.updatePopup != nil { model.closeUpdatePopup() } })) {
             if model.updatePopup?["kind"] as? String == "feature" {   // 大版本首次打开的新功能大窗（docs/site/feature.json，updater.py feature_spotlight）

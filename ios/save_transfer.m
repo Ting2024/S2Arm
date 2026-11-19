@@ -49,7 +49,10 @@ static NSString *save_location(NSString *root) {
 }
 
 static NSString *data_root(void) {
-    const char *configured = getenv("S2A_RYU_DATA");
+    const s2a_launch_ctx *session = s2a_launch_ctx_get();
+    if (s2a_launch_ctx_container() && !session) return nil;
+    const char *configured = session && session->source != S2A_LCTX_COMPAT
+        ? session->ryu_data : getenv("S2A_RYU_DATA");
     NSString *root = configured ? [NSString stringWithUTF8String:configured] :
         [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"S2A/ryujinx"];
     // Foundation may shorten /private/var back to /var. Resolve an existing
@@ -75,13 +78,36 @@ static NSString *work_root(void) {
 static NSDictionary *game_identity(void) {
     // 启动上下文里有本款模块目录、且目录里有 save-identity.json 就用它：多款容器选了游戏，或直接按 S2A_LAUNCH_CTX 起的那一款（那时 s2a_launch_ctx_container()
     //   判「不是容器」，原先就去包根找、多款容器包根没有，存档页 / iCloud 同步 / 测试开关都取不到本款身份）；单款包模块目录里没有它，照旧取包根那份
-    const s2a_launch_ctx *c = s2a_launch_ctx_get();
-    NSString *mod = c && c->module_dir[0] ? [@(c->module_dir) stringByAppendingPathComponent:@"save-identity.json"] : nil;
+    const s2a_launch_ctx *session = s2a_launch_ctx_get();
+    NSString *mod = session && session->module_dir[0] ? [@(session->module_dir) stringByAppendingPathComponent:@"save-identity.json"] : nil;
     NSURL *url = mod && [NSFileManager.defaultManager fileExistsAtPath:mod] ? [NSURL fileURLWithPath:mod]
                                                                          : [NSBundle.mainBundle URLForResource:@"save-identity" withExtension:@"json"];
     NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
     id game = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    return [game isKindOfClass:NSDictionary.class] ? game : nil;
+    BOOL matches = [game isKindOfClass:NSDictionary.class];
+    if (matches && session && session->source != S2A_LCTX_COMPAT && session->game_id[0])
+        matches = [game[@"id"] isKindOfClass:NSString.class] &&
+                  [game[@"id"] caseInsensitiveCompare:@(session->game_id)] == NSOrderedSame;
+    if (matches) return game;
+    if (session && session->game_id[0]) {
+        NSString *gid = [@(session->game_id) uppercaseString];
+        NSString *name = gid;
+        NSString *catPath = [@(s2a_launch_ctx_bundle_dir()) stringByAppendingPathComponent:@"s2a_catalogue.json"];
+        NSData *catData = [NSData dataWithContentsOfFile:catPath];
+        NSDictionary *cat = catData ? [NSJSONSerialization JSONObjectWithData:catData options:0 error:nil] : nil;
+        if ([cat isKindOfClass:NSDictionary.class] && [cat[@"games"] isKindOfClass:NSArray.class]) {
+            for (NSDictionary *entry in cat[@"games"]) {
+                if ([entry isKindOfClass:NSDictionary.class] && [entry[@"title_id"] isKindOfClass:NSString.class] &&
+                    [entry[@"title_id"] caseInsensitiveCompare:gid] == NSOrderedSame) {
+                    if ([entry[@"name"] isKindOfClass:NSString.class] && [entry[@"name"] length]) name = entry[@"name"];
+                    break;
+                }
+            }
+        }
+        NSString *cid = [[gid lowercaseString] stringByPaddingToLength:64 withString:@"0" startingAtIndex:0];
+        return @{ @"id": gid, @"name": name, @"version": @0, @"contentIdentity": cid };
+    }
+    return nil;
 }
 // 服务层错误说明的语言（#316）：请求带上 App 语言，服务层（services/S2A.Services/SaveTransfer.cs T）按它出中文或英文；判据同 S2AL 字符串表
 static NSString *save_language(void) { return s2a_l10n_zh() ? @"zh-Hans" : @"en"; }
@@ -454,7 +480,7 @@ S2A_VERTICAL_BAR_OFF
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"save.restore.confirm") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
-        [self request:@{ @"operation": @"restore", @"path": self.importPath, @"archiveSha256": self.preview[@"archiveSha256"], @"targetFingerprint": self.preview[@"targetFingerprint"] } completion:^(NSDictionary *result) {
+        [self request:@{ @"operation": @"restore", @"path": self.importPath, @"archiveSha256": self.preview[@"archiveSha256"], @"targetFingerprint": self.preview[@"targetFingerprint"], @"previewUserBinding": self.preview[@"previewUserBinding"] ?: NSNull.null } completion:^(NSDictionary *result) {
             self.preview = nil; self.phase = s2a_save_next(self.phase, S2A_SAVE_EV_RESTORE_OK);
             self.backupPath = [result[@"previousBackup"] isKindOfClass:NSString.class] ? result[@"previousBackup"] : nil;
             self.hasSave = YES;

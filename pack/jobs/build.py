@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import plistlib
 import shutil
@@ -51,9 +52,22 @@ def source_fingerprint(c):
     return None if c.r.get("engineBundle") else tree_hash(c.engine, ENGINE_SOURCES)
 
 
-def validate_files(c, root, files, full=False):
+def validate_file_manifest(files):
+    """Validate paths before any IO, including entries skipped during launch."""
     if not isinstance(files, dict) or not files:
         raise Failure("运行产物校验清单缺失。", code="runtime_invalid")
+    for name, entry in files.items():
+        if (not isinstance(name, str) or not name or "\\" in name or ":" in name or
+                any(ord(ch) < 32 for ch in name) or
+                any(part in ("", ".", "..") for part in name.split("/")) or
+                not isinstance(entry, list) or len(entry) != 2 or
+                type(entry[0]) is not int or entry[0] < 0 or
+                not isinstance(entry[1], str) or (entry[1] != "" and not re.fullmatch(r"[0-9a-f]{64}", entry[1]))):
+            raise Failure("运行产物校验清单无效。", code="runtime_invalid")
+
+
+def validate_files(c, root, files, full=False):
+    validate_file_manifest(files)
     # 判据同逐个 contained()：解析后在 root 里、本身是普通文件（不是软链）、大小对。所在目录只解析一次（11-07：运行包 6 万多个文件，
     #   逐个 realpath 要一百多万次 lstat，catalog 一次 9–15 秒）；文件本身 lstat 一次，不跟软链。
     root = resolve_path(root)
@@ -148,6 +162,19 @@ def missing_after_crash(c, runtime, manifest):
     return None
 
 
+def launch_input(c, game):
+    config = c.r.get("launchInputConfig")
+    if config is None:
+        from users import input_path, selected
+        u_path = input_path(c, game["id"])
+        config = read(u_path)
+        if config is None and selected(c)["id"] == "01" and "userId" not in c.r:
+            config = read(layout.path(c, game["id"], "input.json", create=False))
+        if config is None:
+            config = read(c.private / "default-input.json")
+    return config
+
+
 def docked_default(c):
     """没选过档位时的运行模式：只认共用设置定义表 game_settings.v1.json 的 docked 缺省（iPhone / Mac 同一处来源，11-17 起两端都是掌机）。
     请求明给布尔（作业测试 / 内部调用）照给的；玩家按款选过的不在这里，launch() 用 community.launch_env 覆盖"""
@@ -157,44 +184,61 @@ def docked_default(c):
     return "1" if community._default(community.settings_table(c)["docked"], {}, "mac") == "docked" else "0"
 
 
-def runtime_env(c, game, runtime, input_ok=True):
+def runtime_env(c, game, runtime, input_ok=True, *, account=None):
+    from users import selected, session_descriptor, runtime_paths, mng_input_root
+    user = selected(c)
+    explicit_user = "userId" in c.r or user["id"] != "01"
+    if explicit_user:
+        if account != session_descriptor(c, game["id"]):
+            raise Failure("运行宿主尚未确认所选用户账号接口，已停止启动。", code="runtime_invalid")
+    elif account is not None:
+        raise Failure("隐式旧账号启动不能附带用户描述符。", code="runtime_invalid")
     # 游戏语言：请求带 gameLanguage（玩家在启动设置里逐款选）就设 S2A_SYSTEM_LANGUAGE；不带就跟 Mac 系统首选语言（宿主 services/S2A.Services/Host.cs PickLanguage
     #   → SystemLocale.FromPreferred；11-13 起不跟启动器界面语言：界面只有中英，日 / 韩语玩家的 Switch 存档名字会乱码）；游戏不支持的落英语，英语也没有用游戏自己的缺省
     language = c.r.get("gameLanguage")
     if language is not None and language not in LANGUAGES:
         raise Failure("游戏语言代码无效。")
-    env = c.env()
+    env = c.env() if hasattr(c, "env") else {}
+    if account is not None:
+        env["S2A_SESSION_USER"] = json.dumps(account, ensure_ascii=False, separators=(",", ":"))
     env["S2A_IPHONE_VA"] = "0"   # 玩家起局不用 iPhone 地址模拟；开发 / 普查保留原生缺省（#1530）。
     env.pop("S2A_VAMM_LAYOUT", None)
     env.pop("S2A_PATCH_DIR", None)   # 补丁只在出包时读（随包 patch.tsv 在游戏数据目录里，宿主自己找）；玩家导入的在 <S2A_DOCS>/S2A/patches
-    save = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "saves"))
-    # 存档位置（11-09 维护者）：这款游戏文件夹里的 SaveData/，原生存档格式，放进去下次起局就读、退出时写回（services/S2A.Services/SaveFolder.cs）。
-    #   不叫 Saves：同一文件夹里已有运行层内部的 saves/，APFS / NTFS 不分大小写会撞名；ASCII 名避开非 ASCII 路径的坑
-    # 本地玩家（#623）：请求带 player {user: first | 32 位十六进制, name, folder} = 启动器顶栏选的玩家 → 服务层 S2A_PLAYER_USER / S2A_PLAYER_NAME
-    #   （services/S2A.Services/LocalPlayer.cs），存档位置换成这款文件夹里这个玩家的那个（第一个玩家仍是 SaveData）；没带 = 旧行为
+    env.pop("SW_GAL_SPV_DUMP", None)
     from saves import requested_player   # 校验规则与导入社区存档共用一份（saves.py）
     player = requested_player(c.r)
-    save_folder = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], player["folder"] if player else "SaveData"))
-    cache = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "shader-cache"))
-    docs = contained(c.library, c.library / "temp" / game["id"])
-    for p in (save, cache, docs):
-        p.mkdir(parents=True, exist_ok=True)
-    # S2A_SAVE_DIR is a test/import seed that clears saves at boot; launch() sets it
-    # only for a save the player just imported, never for normal play. Persist the Ryujinx data root instead.
-    # 游玩时间（runtime/src/playtime.c）写进这款的游戏文件夹：S2A_DOCS 在 temp/（总览里算可清的临时件），清了不能把累计时长一起清掉
-    env.update(S2A_GAME_DATA=str(runtime), S2A_RYU_DATA=str(save), S2A_DOCS=str(docs), S2A_SAVE_FOLDER=str(save_folder),
-               S2A_PLAYTIME=str(layout.path(c, game["id"], "playtime.json")),
-               # 即时快照（0.6.0）落在这款的游戏文件夹里（同游玩时间，不放可清的 temp/），删这款时随文件夹一起删；宿主 runtime/src/snapshot.c s2a_snap_dir_for 读
-               S2A_SNAPSHOT_DIR=str(layout.path(c, game["id"], "snapshot")),
-               NXGAL_SHADER_CACHE_DIR=str(cache / "shaders"), NXGAL_PSO_DEV_DIR=str(cache / "pso"),
-               S2A_MACRO_DUMP=str(cache / "macros"),
+    outputs = runtime_paths(c, game["id"])
+    mng_root = mng_input_root(c, game["id"])
+    mng_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(mng_root, 0o700)
+    for key, path in outputs.items():
+        if key == "S2A_RYU_DATA" and not explicit_user:
+            continue
+        (path.parent if key in ("DM_PSO_USER", "S2A_WIDEN_FLAT_CACHE") else path).mkdir(parents=True, exist_ok=True)
+    env.update({key: str(path) for key, path in outputs.items()})
+    env["S2A_MNG_INPUT_ROOT"] = str(mng_root.resolve())
+    create_game_dir = not explicit_user
+    save_folder = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], player["folder"] if player else "SaveData", create=create_game_dir))
+    if not explicit_user:
+        save = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "saves"))
+        cache = contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "shader-cache"))
+        for p in (save, cache):
+            p.mkdir(parents=True, exist_ok=True)
+        if os.environ.get("SW_GAL_SPV_DUMP") is None:
+            env.update(S2A_RYU_DATA=str(save),
+                       NXGAL_SHADER_CACHE_DIR=str(cache / "shaders"),
+                       NXGAL_PSO_DEV_DIR=str(cache / "pso"),
+                       S2A_MACRO_DUMP=str(cache / "macros"))
+    env.update(S2A_GAME_DATA=str(runtime), S2A_SAVE_FOLDER=str(save_folder),
+               S2A_PLAYTIME=str(layout.path(c, game["id"], "playtime.json", create=create_game_dir)),
+               S2A_SNAPSHOT_DIR=str(layout.path(c, game["id"], "snapshot", create=create_game_dir)),
                S2A_DOCKED=docked_default(c),   # 缺省掌机（11-17 维护者定，同 iPhone）；玩家在这款设置里选过的由 launch() 里 community.launch_env 盖上
                S2A_AUTOPLAY="0", S2A_GAME_NAME=game["name"], S2A_GAME_ID=game["id"],
                S2A_INPUT_GUIDE_PREFS=str(c.private / "input-guides" / (game["id"] + ".json")),
                # 金手指（11-12）：这款游戏文件夹的 cheats/（玩家导入 + 启动器从公开库取的 txt、开关 enabled.txt），Mac 宿主 Cheats.cs 读它
-               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))),
+               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats", create=create_game_dir))),
                # 资源替换类 mod（11-15）：这款游戏文件夹的 mods/（启动器「游戏设置 → Mod」导入），服务层 RomFsMods.cs 起局叠到 RomFS 上
-               S2A_MODS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "mods"))))
+               S2A_MODS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "mods", create=create_game_dir))))
     if player:
         env["S2A_PLAYER_USER"] = player["user"]
         if player.get("name"):
@@ -219,9 +263,7 @@ def runtime_env(c, game, runtime, input_ok=True):
         env["S2A_NS2_SOCKET"] = controller_relay
     # Freeze exactly what the pre-launch card showed. Never rewrite another run's snapshot.
     # input_ok = False：宿主不认键位映射（launch 判的）→ 这局不带映射、用默认键位（v0.3.1：认不出照常玩，不让玩家先去重新打包）
-    config = c.r.get("launchInputConfig") if input_ok else None
-    if config is None and input_ok:
-        config = read(layout.path(c, game["id"], "input.json", create=False)) or read(c.private / "default-input.json")
+    config = launch_input(c, game) if input_ok else None
     if config is not None:
         try:
             validate_input(config)
@@ -311,13 +353,16 @@ def keep_runtime_nros(c, game_id, source):
 
 def launch(c):
     import sgrade
-    with c.lock("execution"), c.idle(sgrade.game_lock(c.r.get("gameId") or "")) as free:
+    from users import selected, session_lock, admitted_session_descriptor
+    user = selected(c)
+    with session_lock(c, c.game()["id"]), c.idle(sgrade.game_lock(c.r.get("gameId") or ""), shared=True) as free:
         if not free:   # 这款正在升级 S 级优化（sgrade.upgrade_game 拿着这款的锁）：只挡这一款，升级做完自动解除
             raise Failure("这款游戏正在升级 S 级优化，升级完成后就能开始。", code="sgrade_upgrading")
         game = c.game()
         from saves import recover
-        recover(c, game, override=c.r.get("overrideRecovery") is True)   # 回退失败：玩家单独确认「仍要启动」才放行（同 iPhone，审计 18:00 P0-3）
-        runtime = layout.image_mac(c, game["id"], create=False)
+        explicit = "userId" in c.r or user["id"] != "01"
+        legacy = c.library / "games" / game["id"] / "current"
+        runtime = legacy.resolve() if legacy.exists() or legacy.is_symlink() else layout.image_mac(c, game["id"], create=False)
         # 起局前不再自动补 S 级优化 / 按新改写器重改写（11-17 维护者：「改成不自动运行，玩家手动点击 S 级优化再升级」，sgrade.upgrade_game）
         from rewrite_refresh import kept_nros_mac
         kept_nros_mac(c, game["id"], runtime)   # 运行时留下、还没补进的 NRO（#8be819）：上次收局没补成的这里再补
@@ -335,10 +380,27 @@ def launch(c):
             raise Failure("运行资源与所选游戏不匹配。", code="runtime_invalid")
         if manifest.get("memoryRequirementsVersion") != 2:
             raise Failure("这款游戏需要重新打包，完成后即可启动。", code="runtime_invalid")
-        host, trial = host_update.choose(c, game["id"], runtime, manifest)   # 公共宿主：兼容就换上本版的（这局是试玩），否则用原来的
-        executable = host_update.host_exe(c, host)
-        if not os.access(executable, os.X_OK):
-            raise Failure("S2Arm Mac 宿主不可执行。", code="permission_denied")
+        info = layout.game_info(c, game["id"])
+        trial = False
+        host_sha = None
+        if info.get("hostMac") or host_update.bundled_sha(c):
+            host_sha, trial = host_update.choose(c, game["id"], runtime, manifest)
+            executable = host_update.host_exe(c, host_sha)
+            if not os.access(executable, os.X_OK):
+                raise Failure("S2Arm Mac 宿主不可执行。", code="permission_denied")
+            host = executable.parents[2]
+        else:
+            from host_update import current_host
+            host = current_host(c, manifest) or runtime / "S2ArmGame.app"
+            executable = host / "Contents/MacOS/s2arm-host"
+        account = None
+        if not explicit:
+            recover(c, game, override=c.r.get("overrideRecovery") is True)
+        if explicit:
+            from host_update import verify_signature
+            verify_signature(host)
+            account = admitted_session_descriptor(c, game["id"], executable)
+            recover(c, game, override=c.r.get("overrideRecovery") is True)
         input_ok = True
         if c.r.get("launchInputConfig") is not None:
             supported, _ = toolchain.input_interface(c, executable)
@@ -346,7 +408,7 @@ def launch(c):
                 print("[起局] 这款的宿主不认键位映射，这局用默认键位（重新打包后映射生效）", file=sys.stderr, flush=True)
                 c.diagnostic("这款游戏的运行包认不得自定义键位，这次先用默认键位；重新打包这款后自定义键位就会生效。", code="runtime_invalid", severity="warning")
                 input_ok = False
-        env = runtime_env(c, game, runtime, input_ok=input_ok)
+        env = runtime_env(c, game, runtime, input_ok=input_ok, account=account)
         from saves import claim_seed, finish_seed
         seed = claim_seed(c, game["id"])
         if seed:
@@ -364,14 +426,14 @@ def launch(c):
         back = False
         try:
             c.begin("游戏运行中", key="game_running")
-            log = c.logs / (c.task + "-game.log")
+            log = getattr(c, "logs", c.private / "logs") / (c.task + "-game.log")
             started, wall = time.monotonic(), time.time()
             try:
                 import onerom   # 一款一份资源（0.6.0）：游戏跑过加载期后在后台把 Mac 运行版本合并到 iPhone 那份 game.img（玩家不等，退出就停、下次接着）
-                onerom.during(c, game["id"], lambda: c.run([executable, runtime], log, env, cwd=c.library / "temp" / game["id"]))
+                onerom.during(c, game["id"], lambda: c.run([executable, runtime], log, env, cwd=Path(env["S2A_DOCS"])))
             except Failure as f:
                 if trial:   # 新宿主试玩：TRIAL_OK_SECONDS 内异常退出 = 不认这款，下次退回原来的；玩过这么久才崩不怪宿主
-                    host_update.settle(c, game["id"], host, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
+                    host_update.settle(c, game["id"], host_sha, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
                 if f.code == "tool_exit" and heap_learned_now(env, game["id"], wall):   # 这一局普通堆不够、已记下要的堆（runtime svc_mem.c heap_need）：下一局按它给，不是崩溃、不关金手指
                     raise Failure("这款需要更多内存：已经记下要多少，再点一次开始就能进。", code="game_heap_learned", internal=str(f)) from None
                 if f.code == "tool_exit":   # 游戏进程自己非 0 退出（多为崩溃，139 = 段错误）：给启动页一个说人话的码，原文与退出码随错误摘要带走
@@ -386,7 +448,7 @@ def launch(c):
                     raise Failure(f"游戏运行中意外退出了（退出码 {getattr(c, 'last_rc', '?')}）。" + doubt_note, code="game_crashed", internal=str(f)) from None
                 raise
             if trial:
-                host_update.settle(c, game["id"], host, ok=True)
+                host_update.settle(c, game["id"], host_sha, ok=True)
             import cheats   # 好好收局：记下这时开着的，下次崩了只关比这多开的（cheats.narrow）
             cheats.note_good(c, game)
             back = marker.exists()
@@ -409,7 +471,12 @@ def launch(c):
                     path.unlink(missing_ok=True)
                 except OSError:
                     c.emit("message", "本局映射快照清理失败，请检查应用数据目录权限。")
-        return {"gameId": game["id"], "returnToLibrary": True} if back else {"gameId": game["id"]}
+        res = {"gameId": game["id"]}
+        if explicit:
+            res["userId"] = user["id"]
+        if back:
+            res["returnToLibrary"] = True
+        return res
 
 
 VAGUARD = "libs2a_vaguard.dylib"
@@ -951,7 +1018,7 @@ def prepare(c):
             prune_runtime_extras(temporary)
             if not c.r.get("engineBundle") and fingerprint != source_fingerprint(c):   # 只有源码树开发会在出包中途改源码；发版引擎冻结
                 raise Failure("构建期间 S2Arm 源码发生变化，请重试；旧运行版本已保留。")
-            manifest = dict(identity, memoryRequirementsVersion=2,
+            manifest = dict(identity, runtimeHostABI=1, memoryRequirementsVersion=2,
                             memoryRequirementsSha256=digest(current / "addr_need.tsv"),
                             engine="S2Arm", gameId=game["id"], gameName=game["name"], compatibility="unverified",
                             files=snapshot(c, temporary), **(host_update.engine_compat(c) or {}),   # 只换宿主的判据（host_update.py）

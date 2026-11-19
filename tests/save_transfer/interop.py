@@ -108,13 +108,21 @@ with tempfile.TemporaryDirectory(prefix="s2arm-public-save-interop-") as tempora
     exported = snapshot(source, exported=True)
 
     def csharp_call(operation, path=None, *, root=source, game_identity=identity,
-                    expected_code=None, env=None, **extra):
+                    expected_code=None, env=None, session=None, **extra):
         request = dict(operation=operation, dataRoot=str(root), workRoot=str(scratch / "csharp-work"),
                        game=game_identity, path=str(path) if path else None) | extra
         write_json(request_path, request)
+        run_env = os.environ.copy()
+        if env is not None:
+            run_env.update(env)
+        # Every subprocess receives an explicit test-only session boundary.
+        for key in ("S2A_SESSION_USER", "S2A_RYU_DATA", "S2A_LAUNCH_GAME_ID"):
+            run_env.pop(key, None)
+        if session is not None:
+            run_env.update(S2A_SESSION_USER=json.dumps(session), S2A_RYU_DATA=session["stateRoot"],
+                           S2A_LAUNCH_GAME_ID=GAME_ID)
         process = subprocess.run([DOTNET, DRIVER, "--request", str(request_path)],
-                                 capture_output=True, text=True, check=True, timeout=60,
-                                 env=None if env is None else os.environ | env)
+                                 capture_output=True, text=True, check=True, timeout=60, env=run_env)
         response = json.loads(process.stdout)
         if expected_code:
             assert not response["ok"] and response["error"]["code"] == expected_code, response
@@ -164,6 +172,54 @@ with tempfile.TemporaryDirectory(prefix="s2arm-public-save-interop-") as tempora
     assert result["committed"] and snapshot(source) == expected
     assert snapshot(target) == exported
     print(f"PASS G05 -> G06 restore/export -> G05 restore; {p['fileCount']} files, directories, SHA256 and owners match")
+
+    # Exercise the public native/managed request boundary with actual LibHac
+    # archives, not private Context/Identity helpers. No player data is involved.
+    selected_root = scratch / "session02" / "ryujinx"
+    selected_work = selected_root.parent / "save-transfer"
+    session = dict(schema=1, id="02", name="Public files", accountUid=USER, stateRoot=str(selected_root))
+    def bound(operation, *, selected=session, root=selected_root, expected_code=None, **extra):
+        return csharp_call(operation, python_archive, root=root, session=selected,
+                           workRoot=str(root.parent / "save-transfer"), expected_code=expected_code, **extra)
+    for wrong in (scratch / "other-session" / "ryujinx",):
+        bound("inspect", root=wrong, expected_code="save_wrong_user")
+        assert not wrong.parent.exists()
+    bound("restore", expected_code="save_changed")
+    assert not selected_work.exists() and not selected_root.exists()
+    selected_preview = bound("inspect")
+    binding = selected_preview["previewUserBinding"]
+    assert len(binding) == 64 and not selected_root.exists()
+    confirm = dict(archiveSha256=selected_preview["archiveSha256"],
+                   targetFingerprint=selected_preview["targetFingerprint"], previewUserBinding=binding)
+    before_work = snapshot(selected_work)
+    bound("restore", selected=session | {"id": "03"}, expected_code="save_changed", **confirm)
+    assert snapshot(selected_work) == before_work and not selected_root.exists()
+    bound("inspect", selected=session | {"accountUid": OTHER_USER}, expected_code="save_wrong_user")
+    assert not selected_root.exists()
+    assert bound("restore", **confirm)["committed"]
+    assert snapshot(selected_root) == exported
+    # An immutable UID survives renaming; preview admission binds identity/root,
+    # not a mutable display label. Real progress changes still invalidate it.
+    preview = bound("inspect", selected=session | {"name": "Renamed"})
+    assert preview["previewUserBinding"] == binding
+    progress_file = next(selected_root.glob("bis/user/save/*/0/nested/readme.md"))
+    progress_file.write_bytes(b"independent changed progress")
+    changed_snapshot = snapshot(selected_root)
+    bound("restore", expected_code="save_changed", **confirm)
+    assert snapshot(selected_root) == changed_snapshot
+    preview = bound("inspect")
+    result = bound("restore", archiveSha256=preview["archiveSha256"],
+                   targetFingerprint=preview["targetFingerprint"], previewUserBinding=preview["previewUserBinding"])
+    assert result["committed"] and snapshot(selected_root) == exported
+    # User01 keeps legacy ownership; there is no generated replacement UID.
+    legacy_root = scratch / "session01" / "ryujinx"
+    legacy = dict(schema=1, id="01", name="Legacy", accountUid=None, stateRoot=str(legacy_root))
+    preview = bound("inspect", selected=legacy, root=legacy_root)
+    bound("restore", selected=legacy, root=legacy_root, archiveSha256=preview["archiveSha256"],
+          targetFingerprint=preview["targetFingerprint"], previewUserBinding=preview["previewUserBinding"])
+    assert snapshot(legacy_root) == exported
+    assert snapshot(source) == expected
+    print("PASS typed session inspect/restore: exact root/user/UID, stale preview, rename, replacement and user01 preservation")
 
     def compare(path, code="save_invalid", *, root=source, **extra):
         assert python_call("saveInspect", path=str(path), expected=code, **extra) == csharp_call(

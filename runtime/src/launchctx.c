@@ -1,5 +1,6 @@
 // 启动上下文（LaunchContext）：定义与口径见 runtime/include/s2a_launch_ctx.h。本文件只做解析、冻结（单款构造期 / 多款容器选游戏时）、一进程一款与每款 env.txt，
 //   各读者（host_main.c / loader.c / vawin.c / ios/settings.m）取冻结后的结构，C# 与其余原生读者经 S2A_GAME_DATA / S2A_DOCS / S2A_RYU_DATA 取。
+// 弱链接[host,ios,lab,touchtest,nvntest]：S2A_LauncherAccount_v1（只取实际服务导出地址，不执行托管代码）
 #include "native.h"
 #include "s2a_launch_ctx.h"
 #include "s2a_docs.h"   // 多款容器每款资源包根（s2a_pack_root）
@@ -7,6 +8,7 @@
 #include <CommonCrypto/CommonDigest.h>   // 程序包 image_sha256 核对（program_sha_check）
 #include <dlfcn.h>                       // s2a_imgpack_open：宿主才链（imgpack.c），单测不链 → 不预注册   // S2A_HOST_ABI：宿主读产物的约定号（选游戏时核）
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -390,20 +392,219 @@ int s2a_launch_ctx_resolve_game(s2a_launch_ctx *c, const char *b, const char *ho
     return 0;
 }
 
+// 用户路径子合同：HOME上方的平台别名允许规范化，内部逐级openat且不跟链接。
+// 缺失后缀只读检查时允许；建目录时也只在已打开的父目录下操作。
+static int user_path_walk(const char *home, const char *path, int create) {
+    size_t n = strlen(home);
+    if (strncmp(path, home, n) || path[n] != '/') return -1;
+    char rel[S2A_LCTX_PATH];
+    if (put(rel, path + n + 1)) return -1;
+    int fd = open(home, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char *save = NULL; int rc = 0;
+    for (char *part = strtok_r(rel, "/", &save); part; part = strtok_r(NULL, "/", &save)) {
+        if (!strcmp(part, ".") || !strcmp(part, "..")) { rc = -1; break; }
+        int next = openat(fd, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (next < 0 && errno == ENOENT) {
+            if (!create) break;
+            if (mkdirat(fd, part, 0700) && errno != EEXIST) { rc = -1; break; }
+            next = openat(fd, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        }
+        if (next < 0) { rc = -1; break; }
+        close(fd); fd = next;
+    }
+    close(fd); return rc;
+}
+static int user_id_ok(const char *id) {
+    if (!id) return 0;
+    size_t n = strlen(id);
+    if (n < 2 || n > 6 || (id[0] == '0' && (n != 2 || id[1] == '0'))) return 0;
+    for (size_t i = 0; i < n; i++) if (id[i] < '0' || id[i] > '9') return 0;
+    return 1;
+}
+int s2a_launch_ctx_resolve_user_paths(s2a_launch_ctx *c, const char *b, const char *home,
+                                     const char *gid, const char *uid, char *why, size_t why_n) {
+    memset(c, 0, sizeof *c);
+    if (why && why_n) why[0] = 0;
+    if (!user_id_ok(uid)) { WHY("用户编号不合规"); return -1; }
+    struct stat st;
+    if (!home || home[0] != '/' || lstat(home, &st) || !S_ISDIR(st.st_mode)) {
+        WHY("用户容器根不可用或是链接"); return -1;
+    }
+    char *canonical = realpath(home, NULL);
+    if (!canonical) { WHY("用户容器根无法规范化"); return -1; }
+    s2a_launch_ctx candidate;
+    int rc = s2a_launch_ctx_resolve_game(&candidate, b, canonical, gid, why, why_n);
+    if (rc) { free(canonical); return -1; }
+    if (strcmp(uid, "01")) {
+        char root[S2A_LCTX_PATH], rel[32];
+        snprintf(rel, sizeof rel, "S2A/users/%s", uid);
+        if (join(root, candidate.docs, rel) || join(candidate.docs, root, "docs") || join(candidate.ryu_data, root, "ryujinx")) {
+            WHY("用户路径太长"); free(canonical); return -1;
+        }
+    }
+    if (user_path_walk(canonical, candidate.docs, 0) || user_path_walk(canonical, candidate.ryu_data, 0)
+        || user_path_walk(canonical, candidate.game_data, 0)) {
+        WHY("用户路径包含链接、非目录或无法读取"); free(canonical); return -1;
+    }
+    strcpy(candidate.user_id, uid);
+    *c = candidate;
+    free(canonical); return 0;
+}
+
+// Do not invoke this NativeAOT method before committing the session environment:
+// entering managed code can initialize the runtime's environment snapshot.
+extern int S2A_LauncherAccount_v1(void) __attribute__((weak_import));
+int s2a_launch_ctx_account_service_v1(void) { return S2A_LauncherAccount_v1 != NULL; }
+
+static int account_space(unsigned c) {
+    return c == 0x20 || c == 0x85 || c == 0xa0 || c == 0x1680 ||
+        (c >= 0x2000 && c <= 0x200a) || c == 0x2028 || c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000;
+}
+static int account_name_ok(const char *s) {
+    if (!s) return 0;
+    size_t n = strnlen(s, 33);
+    if (!n || n > 32) return 0;
+    unsigned first = 0, last = 0;
+    for (size_t i = 0; i < n;) {
+        unsigned c = (unsigned char)s[i++], min = 0; int more = 0;
+        if (c >= 0xc2 && c <= 0xdf) { c &= 31; more = 1; min = 0x80; }
+        else if (c >= 0xe0 && c <= 0xef) { c &= 15; more = 2; min = 0x800; }
+        else if (c >= 0xf0 && c <= 0xf4) { c &= 7; more = 3; min = 0x10000; }
+        else if (c >= 0x80) return 0;
+        if (i + more > n) return 0;
+        while (more--) { unsigned b = (unsigned char)s[i++]; if ((b & 0xc0) != 0x80) return 0; c = (c << 6) | (b & 63); }
+        if (c < min || c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff) || c < 32 || (c >= 127 && c <= 159)) return 0;
+        if (!first) first = c;
+        last = c;
+    }
+    return !account_space(first) && !account_space(last);
+}
+static int account_ok(const s2a_launch_user_v1 *u) {
+    if (!u || u->version != 1 || !user_id_ok(u->id) || !account_name_ok(u->name)) return 0;
+    if (!strcmp(u->id, "01")) return u->account_uid == NULL;
+    const char *v = u->account_uid;
+    if (!v || strnlen(v, 33) != 32 || !strcmp(v, "00000000000000000000000000000000") ||
+        !strcmp(v, "00000000000000010000000000000000")) return 0;
+    for (int i = 0; i < 32; i++) if (!((v[i] >= '0' && v[i] <= '9') || (v[i] >= 'a' && v[i] <= 'f'))) return 0;
+    return 1;
+}
+// JSON strings are generated here, never accepted as arbitrary caller JSON.
+static int json_string(char *out, size_t cap, const char *s) {
+    size_t at = 0;
+    if (cap < 3) return -1;
+    out[at++] = '"';
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 32) {
+            if (at + 6 >= cap) return -1;
+            snprintf(out + at, cap - at, "\\u%04x", *p); at += 6;
+        } else {
+            if (at + 2 >= cap) return -1;
+            if (*p == '"' || *p == '\\') out[at++] = '\\';
+            out[at++] = *p;
+        }
+    }
+    if (at + 2 > cap) return -1;
+    out[at++] = '"'; out[at] = 0; return 0;
+}
+static int account_descriptor(s2a_launch_ctx *c, const s2a_launch_user_v1 *u) {
+    char name[70], root[S2A_LCTX_PATH * 2 + 8], uid[36] = "null";
+    if (json_string(name, sizeof name, u->name) || json_string(root, sizeof root, c->ryu_data) ||
+        (u->account_uid && json_string(uid, sizeof uid, u->account_uid))) return -1;
+    int n = snprintf(c->session_user, sizeof c->session_user,
+        "{\"schema\":1,\"id\":\"%s\",\"name\":%s,\"accountUid\":%s,\"stateRoot\":%s}", u->id, name, uid, root);
+    return n < 0 || (size_t)n >= sizeof c->session_user ? -1 : 0;
+}
+
 // ---------- 进程内状态：定模式（一次）→ 冻结（单款：构造期第一次取；容器：选游戏时）----------
 static s2a_launch_ctx g_ctx; static _Atomic int g_ok; static char g_err[600];
 static char g_bundle[S2A_LCTX_PATH]; static int g_container;
 static pthread_mutex_t g_sel_mu = PTHREAD_MUTEX_INITIALIZER; static int g_selected;
-static int export_env(void) {   // 冻结后的四个根写进进程环境（覆盖起局方旧值）；兼容来源不调
-    static const struct { const char *k; size_t off; } ex[] = {
-        {"S2A_GAME_DATA", offsetof(s2a_launch_ctx, game_data)}, {"S2A_DOCS", offsetof(s2a_launch_ctx, docs)},
-        {"S2A_RYU_DATA", offsetof(s2a_launch_ctx, ryu_data)}, {"S2A_LAUNCH_GAME_ID", offsetof(s2a_launch_ctx, game_id)}};
-    for (size_t i = 0; i < sizeof ex / sizeof ex[0]; i++) {
-        const char *v = (const char *)&g_ctx + ex[i].off, *was = getenv(ex[i].k);
-        if (was && strcmp(was, v)) LOG("启动上下文：%s 起局环境另有值，按上下文覆盖", ex[i].k);
-        if (setenv(ex[i].k, v, 1)) { snprintf(g_err, sizeof g_err, "启动上下文：%s 写不进环境（errno %d）", ex[i].k, errno); return -1; }
+// Transactional with respect to launch admission: no service/game consumer starts
+// until all writes succeed. Restore exact previous values (including unset/empty)
+// on failure. If restoration itself fails, poison admission until process restart.
+static int g_env_poisoned;
+#ifdef S2A_TEST_LAUNCH_ENV
+extern int s2a_test_launch_setenv(const char *, const char *, int);
+extern int s2a_test_launch_unsetenv(const char *);
+#define launch_setenv s2a_test_launch_setenv
+#define launch_unsetenv s2a_test_launch_unsetenv
+#else
+#define launch_setenv setenv
+#define launch_unsetenv unsetenv
+#endif
+static const struct { const char *key, *suffix; int file; } user_cache[] = {
+    {"NXGAL_SHADER_CACHE_DIR", "cache/shaders", 0}, {"NXGAL_PSO_DEV_DIR", "cache/pso", 0},
+    {"S2A_MACRO_DUMP", "cache/macros", 0}, {"S2A_SHCOLLECT", "cache/shcollect", 0},
+    {"GAL_AIR_CACHE", "cache/air", 0}, {"GAL_PSO_CACHE", "cache/pipeline", 0},
+    {"S2A_SCHED_DIR", "cache/observations", 0}, {"DM_PSO_USER", "cache/direct/pso_user.tsv", 1},
+    {"TMPDIR", "docs/.tmp", 0},
+    {"S2A_WIDEN_FLAT_CACHE", "cache/direct/widen_flat3.tsv", 1}
+};
+static int prepare_user_caches(const s2a_launch_ctx *c, const char *home) {
+    if (!c->session_user[0] || !strcmp(c->user_id, "01")) return 0;
+    char root[S2A_LCTX_PATH]; put(root, c->ryu_data); *strrchr(root, '/') = 0;
+    // Validate every destination before creating any cache directories.
+    for (int create = 0; create <= 1; create++) {
+        for (size_t i = 0; i < sizeof user_cache / sizeof user_cache[0]; i++) {
+            char path[S2A_LCTX_PATH];
+            if (join(path, root, user_cache[i].suffix)) return -1;
+            if (user_cache[i].file) {
+                struct stat st;
+                if (!lstat(path, &st)) {
+                    if (!S_ISREG(st.st_mode) || st.st_nlink != 1) return -1;
+                } else if (errno != ENOENT) return -1;
+                *strrchr(path, '/') = 0;
+            }
+            if (user_path_walk(home, path, create)) return -1;
+        }
     }
     return 0;
+}
+static int export_env(const s2a_launch_ctx *c) {
+    static const char *blocked[] = {"S2A_SAVE_DIR", "S2A_COLD_START", "S2A_PSO_HARVEST",
+        "DM_PSO_RECORD", "DM_NVN_SHDUMP", "DM_NVN_CBDUMP", "NXGAL_PSO_ARCHIVE_OUT", "NXGAL_PSO_SCRIPT"};
+    enum { BLOCKED_COUNT = sizeof blocked / sizeof blocked[0], CACHE_COUNT = sizeof user_cache / sizeof user_cache[0],
+           MAX_ENV = 5 + BLOCKED_COUNT + CACHE_COUNT };
+    const char *keys[MAX_ENV] = {"S2A_GAME_DATA", "S2A_DOCS", "S2A_RYU_DATA", "S2A_LAUNCH_GAME_ID"};
+    const char *values[MAX_ENV] = {c->game_data, c->docs, c->ryu_data, c->game_id};
+    char paths[CACHE_COUNT][S2A_LCTX_PATH], *old[MAX_ENV] = {0};
+    int count = 4, rc = -1;
+    if (c->session_user[0]) {
+        keys[count] = "S2A_SESSION_USER"; values[count++] = c->session_user;
+        // Empty, not unset: later per-game env.txt only fills missing keys.
+        // Keep those modes blocked even when supplied after the Play boundary.
+        for (size_t i = 0; i < BLOCKED_COUNT; i++) {
+            keys[count] = blocked[i]; values[count++] = "";
+        }
+        if (strcmp(c->user_id, "01")) {
+            char root[S2A_LCTX_PATH]; put(root, c->ryu_data); *strrchr(root, '/') = 0;
+            for (size_t i = 0; i < sizeof user_cache / sizeof user_cache[0]; i++) {
+                if (join(paths[i], root, user_cache[i].suffix)) { snprintf(g_err, sizeof g_err, "用户缓存路径太长"); goto done; }
+                keys[count] = user_cache[i].key; values[count++] = paths[i];
+            }
+        }
+    }
+    // Allocate all snapshots before the first change.
+    for (int i = 0; i < count; i++) {
+        const char *v = getenv(keys[i]);
+        if (v && !(old[i] = strdup(v))) { snprintf(g_err, sizeof g_err, "会话环境快照内存不足"); goto done; }
+    }
+    for (int i = 0; i < count; i++) {
+        if (!launch_setenv(keys[i], values[i], 1)) continue;
+        snprintf(g_err, sizeof g_err, "会话环境写入失败，未启动游戏");
+        // Include the failed entry: the injected/platform writer may have changed it.
+        for (int j = i; j >= 0; j--) {
+            int bad = old[j] ? launch_setenv(keys[j], old[j], 1) : launch_unsetenv(keys[j]);
+            if (bad) g_env_poisoned = 1;
+        }
+        if (g_env_poisoned) snprintf(g_err, sizeof g_err, "会话环境恢复失败，请关闭App重新打开；禁止继续启动");
+        goto done;
+    }
+    rc = 0;
+done:
+    for (int i = 0; i < count; i++) free(old[i]);
+    return rc;
 }
 // selfsign.c：手机端自签真机验证（开发用环境变量，没设就直接返回）。这里给弱的空实现：链了 selfsign.c 的（App / 宿主）用它的强定义，
 //   只链 launchctx.c 的单测和工具不用跟着链 Security
@@ -430,7 +631,7 @@ static void decide(void) {
     }
     if (s2a_launch_ctx_resolve(&g_ctx, g_bundle, getenv("HOME"), ctx, g_err, sizeof g_err)) return;
     if (g_ctx.source == S2A_LCTX_FILE) {   // 文件来源写四个根进环境；兼容来源不写任何环境变量，各读者照旧取缺省（行为同改造前）
-        if (export_env()) return;
+        if (export_env(&g_ctx)) return;
         LOG("启动上下文：%s（游戏 %s%s%s），模块 %s，镜像包 %s，资源包 %s，文档 %s", g_ctx.ctx_path, g_ctx.game_id, g_ctx.build_id[0] ? " 构建 " : "", g_ctx.build_id,
             g_ctx.module_dir, g_ctx.images, g_ctx.game_data, g_ctx.docs);
     }
@@ -455,16 +656,20 @@ int s2a_launch_ctx_game_needs_update(const char *gid) {
 
 static int g_sel_kind;   // 上一次 s2a_launch_ctx_select 被拒的类别（S2A_SELECT_*）：库界面按它给玩家说人话，原文只进日志
 int s2a_launch_ctx_select_kind(void) { return g_sel_kind; }
-const char *s2a_launch_ctx_select(const char *gid) {
+static const char *select_paths(const char *gid, const char *uid, const s2a_launch_user_v1 *user) {
     static char why[700];
     pthread_once(&g_once, decide);
     g_sel_kind = S2A_SELECT_OTHER;
     if (!g_container) return "不是多款容器（包根没有 s2a_catalogue.json，或设了 S2A_LAUNCH_CTX）：启动上下文已在构造期定好，不能再选游戏";
     pthread_mutex_lock(&g_sel_mu);
     const char *r = NULL;
+    if (g_env_poisoned) { r = "会话环境未能恢复，请关闭App重新打开"; goto out; }
     if (g_selected) { snprintf(why, sizeof why, "本进程已经选过游戏 %s，同一进程不再起第二款：请关掉 App 重新打开", g_ctx.game_id); r = why; goto out; }
     s2a_launch_ctx c; char w[600];
-    if (s2a_launch_ctx_resolve_game(&c, g_bundle, getenv("HOME"), gid, w, sizeof w)) { snprintf(why, sizeof why, "%s", w); g_sel_kind = S2A_SELECT_APP_INCOMPLETE; r = why; goto out; }
+    int rc = uid ? s2a_launch_ctx_resolve_user_paths(&c, g_bundle, getenv("HOME"), gid, uid, w, sizeof w)
+                 : s2a_launch_ctx_resolve_game(&c, g_bundle, getenv("HOME"), gid, w, sizeof w);
+    if (rc) { snprintf(why, sizeof why, "%s", w); if (!uid) g_sel_kind = S2A_SELECT_APP_INCOMPLETE; r = why; goto out; }
+    if (user && account_descriptor(&c, user)) { r = "账号描述符无法生成"; goto out; }
     {   // 宿主约定号（s2a_host_abi.h）：产物是按别的约定出的就不载入——不然改写器与运行时对不上，进游戏后静默崩。对不上 → 回游戏库标「要更新」
         char prog[S2A_LCTX_PATH], app[S2A_LCTX_PATH]; int have = 0;
         int k = join(app, g_bundle, "s2a_catalogue.json") ? -1 : s2a_host_abi_check(s2a_program_catalogue_path(prog, sizeof prog, c.game_data) ? NULL : prog, app, gid, &have, w, sizeof w);
@@ -485,30 +690,27 @@ const char *s2a_launch_ctx_select(const char *gid) {
         if (ks > 0) waive("%s：版本不配，可能闪退，在电脑上重新签名 / 装到 iPhone 可解（ios_program_resign）", w);   // 校验不过照常进（11-17 维护者）；签名系统不认（下面 rc == 3）物理上加载不了，照旧拒
         if (ks < 0) waive("游戏 %s 的程序包核不了：%s", gid, w);
         int (*open_pk)(const char *, void **, char *, size_t) = (int (*)(const char *, void **, char *, size_t))dlsym(RTLD_DEFAULT, "s2a_imgpack_open");
-        void *pk = NULL; int rc = c.from_program && open_pk ? open_pk(c.images, &pk, w, sizeof w) : 0;   // 只对程序包里的款：App 包里的款（0.6.0 前玩家手上全是这种）照旧进局后由装载器打开，行为同改造前
-        if (rc == 3) {   // 注册签名失败（证书和手机身份相同、但签名格式老，如 Windows plumesign 签的程序库）：手机上有身份就当场强制重签一次，签好再注册；还不行才回游戏库
-            int (*rf)(const char *, const char *, const char *, char *, char *, size_t, char *, size_t) =
-                (int (*)(const char *, const char *, const char *, char *, char *, size_t, char *, size_t))dlsym(RTLD_DEFAULT, "s2a_program_resign_force");
-            char rw[300] = "";
-            if (rf && rf(getenv("HOME"), c.game_data, gid, c.module_dir, c.images, sizeof c.images, rw, sizeof rw) == 1) {
-                char w0[600]; snprintf(w0, sizeof w0, "%s", w); pk = NULL; rc = open_pk(c.images, &pk, w, sizeof w);
-                LOG("启动上下文：%s 的程序库注册签名失败（%s），已用手机上的签名身份重签 → 再注册%s", gid, w0, rc ? "仍失败" : "成功");
-            }
-        }
-        if (rc == 3) { snprintf(why, sizeof why, "ios_program_resign：游戏 %s 的程序库签名本机不认（%s）：要在电脑上重新签名这款", gid, w); g_sel_kind = S2A_SELECT_NEEDS_RESIGN; r = why; goto out; }   // 3 = S2A_IMG_ESIGN（runtime/src/imgpack.h）
-        if (rc) { snprintf(why, sizeof why, "游戏 %s 的程序库打不开（返回 %d）：%s", gid, rc, w); g_sel_kind = S2A_SELECT_APP_INCOMPLETE; r = why; goto out; }
+        void *pk = NULL; int rc2 = c.from_program && open_pk ? open_pk(c.images, &pk, w, sizeof w) : 0;   // 只对程序包里的款：App 包里的款（0.6.0 前玩家手上全是这种）照旧进局后由装载器打开，行为同改造前
+        if (rc2 == 3) { snprintf(why, sizeof why, "ios_program_resign：游戏 %s 的程序库签名本机不认（%s）：要在电脑上重新签名这款", gid, w); g_sel_kind = S2A_SELECT_NEEDS_RESIGN; r = why; goto out; }   // 3 = S2A_IMG_ESIGN（runtime/src/imgpack.h）
+        if (rc2) { snprintf(why, sizeof why, "游戏 %s 的程序库打不开（返回 %d）：%s", gid, rc2, w); g_sel_kind = S2A_SELECT_APP_INCOMPLETE; r = why; goto out; }
     }
     // 本款文档根第一次用时还不在（存档 / wire / 加载页标记各自只建最后一级）：逐级建好
-    for (char *q = c.docs + 1; ; q++) {
+    if (uid) {
+        char *home = realpath(getenv("HOME"), NULL);
+        int bad = !home || user_path_walk(home, c.docs, 1) || user_path_walk(home, c.ryu_data, 0)
+                       || user_path_walk(home, c.game_data, 0) || prepare_user_caches(&c, home);
+        free(home);
+        if (bad) { snprintf(why, sizeof why, "用户路径建立或复核失败"); r = why; goto out; }
+    } else for (char *q = c.docs + 1; ; q++) {
         if (*q && *q != '/') continue;
         char k = *q; *q = 0; int bad = mkdir(c.docs, 0755) && errno != EEXIST; *q = k;
         if (bad) { snprintf(why, sizeof why, "建不了游戏 %s 的文档根 %s（errno %d）", c.game_id, c.docs, errno); g_sel_kind = S2A_SELECT_STORAGE; r = why; goto out; }
         if (!k) break;
     }
+    if (export_env(&c)) { snprintf(why, sizeof why, "%s", g_err); r = why; goto out; }
     if (c.from_program) { char snap[S2A_LCTX_PATH];   // 程序包款：随行目录拍快照，这局读快照（电脑端换上新版后删旧版本目录也不影响，见 s2a_program_snapshot）
         if (!s2a_program_snapshot(getenv("HOME"), gid, c.module_dir, snap)) { LOG("启动上下文：%s 的随行目录拍了快照 %s（原目录 %s）", gid, snap, c.module_dir); put(c.module_dir, snap); put(c.caps_dir, snap); } }
     g_ctx = c;
-    if (export_env()) { snprintf(why, sizeof why, "%s", g_err); memset(&g_ctx, 0, sizeof g_ctx); r = why; goto out; }
     g_selected = 1; atomic_store(&g_ok, 1);
     LOG("启动上下文：多款容器选了游戏 %s，模块 %s，镜像包 %s，资源包 %s，文档 %s", c.game_id, c.module_dir, c.images, c.game_data, c.docs);
 out:
@@ -517,7 +719,39 @@ out:
     return r;
 }
 
+const char *s2a_launch_ctx_select(const char *gid) { return select_paths(gid, NULL, NULL); }
+void s2a_launch_ctx_reset_selection(void) {
+    pthread_once(&g_once, decide);
+    if (!g_container) return;
+    pthread_mutex_lock(&g_sel_mu);
+    if (!g_env_poisoned) {
+        g_selected = 0;
+        atomic_store(&g_ok, 0);
+    }
+    pthread_mutex_unlock(&g_sel_mu);
+}
+const char *s2a_launch_ctx_select_user_paths(const char *gid, const char *uid) {
+    if (!user_id_ok(uid)) return "用户编号不合规";
+    return select_paths(gid, uid, NULL);
+}
+
+const char *s2a_launch_ctx_select_user(const char *gid, const s2a_launch_user_v1 *user) {
+    if (!s2a_launch_ctx_account_service_v1()) return "此宿主未包含账号服务v1，请更新宿主";
+    if (!account_ok(user)) return "用户账号描述不合规";
+    // These modes can seed/clear shared data, write developer dumps to shared
+    // destinations, or bypass normal game startup. Reject rather than silently
+    // stripping an explicit development request.
+    static const char *incompatible[] = {"S2A_SAVE_DIR", "S2A_COLD_START", "S2A_PSO_HARVEST",
+        "DM_PSO_RECORD", "DM_NVN_SHDUMP", "DM_NVN_CBDUMP", "NXGAL_PSO_ARCHIVE_OUT", "NXGAL_PSO_SCRIPT"};
+    for (size_t i = 0; i < sizeof incompatible / sizeof incompatible[0]; i++) {
+        if (env_nonempty(incompatible[i]))
+            return "用户启动不能与存档种子、清缓存或开发转储采集模式混用";
+    }
+    return select_paths(gid, user->id, user);
+}
+
 const char *s2a_launch_ctx_begin(void) {
+    if (g_env_poisoned) return "会话环境未能恢复，请关闭App重新打开";
     static atomic_int started;
     if (atomic_fetch_add(&started, 1)) return "本进程已经起过一局游戏，同一进程不再起第二局：请从后台划掉 App 后重新打开";
     return NULL;

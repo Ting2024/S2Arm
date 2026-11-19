@@ -20,6 +20,7 @@
 #include "s2a_pad.h"
 #include "s2a_programs.h"
 #include "s2a_launch_ctx.h"
+#include "s2a_import_paths.h"
 #include "../../graphics/nvn/gfx/nvn/dmsh_chain.h"   // DMSH_CHAIN：直连安全网诊断信息里写翻译链
 #include <unistd.h>
 #include <sys/stat.h>
@@ -295,7 +296,8 @@ static int host_run(int argc, char **argv) {
     // 测试层契约：S2A_PACK_APPLY_ONLY=1 只解开推送来的资源包就退出（Documents = $HOME/Documents，Mac 上可用 S2A_DOCS 指）
     s2a_boot_mark("进入 main");
     { const char *e = getenv("S2A_PACK_APPLY_ONLY");
-      if (e && *e == '1') { char docs[1024]; strlcpy(docs, lc->docs, sizeof docs);   // 启动上下文文档根（兼容 = S2A_DOCS，否则 $HOME/Documents）
+      if (e && *e == '1') { char docs[1024];
+          if (s2a_import_apply_docs(lc, docs, sizeof docs) != 1) die("解包资源根无效：拒绝使用用户文档目录代替");
 #if TARGET_OS_IPHONE
           static char sdocs[1024]; strlcpy(sdocs, docs, sizeof sdocs); pthread_t th;
           if (pthread_create(&th, NULL, pack_apply_thread, sdocs)) die("解包线程起不来");

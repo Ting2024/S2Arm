@@ -171,11 +171,14 @@ public struct Settings: Equatable {
     public var values: [String: String]
     /// 宿主内提示的语言（作业层只认 zh-Hans / en）。
     public var uiLanguage: String?
-    public init(values: [String: String] = [:], uiLanguage: String? = nil) { self.values = values; self.uiLanguage = uiLanguage }
+    /// Explicit launcher account captured at launch; nil preserves legacy callers.
+    public var userId: String?
+    public init(values: [String: String] = [:], uiLanguage: String? = nil, userId: String? = nil) { self.values = values; self.uiLanguage = uiLanguage; self.userId = userId }
 }
 
 /// 在跑的一局。
 public struct RunningGame: Equatable {
+    public let userId: String
     public let gameId: String
     /// launch 作业的任务号。
     public let taskId: String

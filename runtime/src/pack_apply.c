@@ -9,7 +9,7 @@
 #include "../third_party/zstd/zstddeclib.c"
 #include "native.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
-#include "s2a_launch_ctx.h"   // 资源包闸门按启动上下文定文档根（多款容器 = 本款 Documents/games/<游戏号>）
+#include "s2a_import_paths.h"   // 资源包闸门按启动上下文定文档根（多款容器 = 本款 Documents/games/<游戏号>）
 #include "../include/s2a_ui_text.h"   // 提示页 / 说明页文字：中文原宏 + _EN，S2A_UI 按界面语言取（#316）
 #include "../include/s2a_selfcheck_page.h"   // 说明页标题「游戏资源不完整」与自检提示页同一句
 __attribute__((weak)) int s2a_ui_zh(void) { return 1; }   // 界面语言（s2a_ui_text.h）：iOS ios/app.m、Mac macos/front_mac.m 强定义；别的平台 / 只链本文件的单测按中文
@@ -1245,10 +1245,37 @@ int s2a_import_decide(const char *docs, struct s2a_gate_watch *w, time_t now, ch
 //   现在：多款容器 → 查本款文档根（ctx->docs = Documents/games/<游戏号>，资源包在它下面）；单款兼容来源没设 S2A_GAME_DATA → 进程级 Documents（同原先）；
 //   其余（单款文件来源 / 开发起局指定了 S2A_GAME_DATA）不查（同原先）。返回 1 = 要查，docs 写进 out；0 = 不查
 int s2a_import_docs_pick(const s2a_launch_ctx *c, int game_data_env, const char *proc_docs, char *out, size_t n) {
-    if (n) out[0] = 0;
-    if (c && c->source == S2A_LCTX_CONTAINER) { snprintf(out, n, "%s", c->docs); return 1; }
+    if (!out || !n) return -1;
+    out[0] = 0;
+    if (c && c->source == S2A_LCTX_CONTAINER) {
+        const char suffix[] = "/资源包";
+        size_t len = strnlen(c->game_data, sizeof c->game_data), end = sizeof suffix - 1;
+        if (len == sizeof c->game_data || len <= end || c->game_data[0] != '/' ||
+            strcmp(c->game_data + len - end, suffix)) return -1;
+        size_t parent = len - end;
+        if (parent >= n) return -1;
+        for (const char *p = c->game_data + 1; *p;) {
+            const char *slash = strchr(p, '/'); size_t part = slash ? (size_t)(slash - p) : strlen(p);
+            if (!part || (part == 1 && p[0] == '.') || (part == 2 && p[0] == '.' && p[1] == '.')) return -1;
+            if (!slash) break;
+            p = slash + 1;
+        }
+        memcpy(out, c->game_data, parent); out[parent] = 0; return 1;
+    }
     if (game_data_env) return 0;
-    snprintf(out, n, "%s", proc_docs ? proc_docs : ""); return 1;
+    int written = snprintf(out, n, "%s", proc_docs ? proc_docs : "");
+    if (written < 0 || (size_t)written >= n) { out[0] = 0; return -1; }
+    return 1;
+}
+int s2a_import_apply_docs(const s2a_launch_ctx *c, char *out, size_t n) {
+    if (!out || !n) return -1;
+    out[0] = 0;
+    if (!c) return -1;
+    if (c->source == S2A_LCTX_CONTAINER)
+        return s2a_import_docs_pick(c, 1, NULL, out, n);
+    size_t len = strnlen(c->docs, sizeof c->docs);
+    if (!len || len == sizeof c->docs || len >= n) return -1;
+    memcpy(out, c->docs, len + 1); return 1;
 }
 // 多款容器的游戏库（app.m s2a_shell_game_install_state / 选游戏前）：本款资源包状态，按同一个判据（s2a_import_state）查 Documents/games/<游戏号>
 //   proc_docs = 进程级 Documents（iOS 调用方取 s2a_container_docs），本款文档根 = <proc_docs>/games/<游戏号>（同 launchctx.c s2a_launch_ctx_resolve_game）
@@ -1393,7 +1420,9 @@ static void *gate_thread(void *a) { (void)a;
 //   返回 1 = 本局资源是闸门当场解开的：起局前读过的随包补丁 / 能力清单读的是解开前的资源包，调用方要重读（审计 P1-106）
 static int imp_docs(char *out, size_t n) {   // 本局资源包闸门的文档根；0 = 本局不查（见 s2a_import_docs_pick）
     char proc[1024]; s2a_container_docs(proc, sizeof proc);
-    return s2a_import_docs_pick(s2a_launch_ctx_get(), getenv("S2A_GAME_DATA") != NULL, proc, out, n);
+    int result = s2a_import_docs_pick(s2a_launch_ctx_get(), getenv("S2A_GAME_DATA") != NULL, proc, out, n);
+    if (result < 0) die("资源导入路径无效：拒绝跳过检查或使用其他用户目录");
+    return result;
 }
 int s2a_import_gate_applies(void) { char d[1024]; return imp_docs(d, sizeof d); }
 // 资源包只缺非核心文件（v0.3.1 缺件照玩）：问玩家「仍要启动」。同一份资源包点过一次就记下（.partial_ok），不再问。

@@ -86,6 +86,29 @@ def _input_probe(exe, c):
     return False, "该引擎的 Mac 宿主没有导出 s2a_vpad_read（旧引擎），映射可以保存但不会生效"
 
 
+def launcher_account_interface(c, executable):
+    """Probe only the admitted host's defined v1 export, without running it.
+
+    The caller must validate the host closure/signature first. Never borrow a
+    capability from an engine manifest, another cached host, or an undefined
+    import. Do not cache by size/mtime: a replaced host must be checked afresh.
+    """
+    exe = Path(executable)
+    if exe.is_symlink() or not exe.is_file():
+        return False, "无法确认此运行宿主支持多用户账号接口"
+    try:
+        result = subprocess.run(["nm", "-gmU", str(exe)], env=c.env(),
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "无法读取此运行宿主的多用户账号接口"
+    if result.returncode == 0 and re.search(
+            r"(?m)^\s*[0-9a-fA-F]+\s+\(__TEXT,__(?:text|managedcode)\)\s+external "
+            r"(?:\[no dead strip\] )?_S2A_LauncherAccount_v1\s*$", result.stdout):
+        return True, "此运行宿主支持多用户账号接口 v1"
+    return False, "此运行宿主未确认支持多用户账号接口，请更新运行组件"
+
+
 def _host_stamp(exe):
     """(大小, mtime) 作为缓存键；st_mtime_ns 比 st_mtime 细，避免同一秒内换宿主读旧结论。"""
     try:

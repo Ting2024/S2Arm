@@ -1773,5 +1773,16 @@
   "s2arm.env.widget.title": "Include the Home Screen widget on iPhone",
   "s2arm.env.widget.detail": "A console-style widget for your iPhone Home Screen that shows your latest and most-played games; tap a cover to play. With a free Apple ID, each new install uses one more App ID (10 per 7 days).",
   "home.card.daysLeft": "%d days left",
-  "home.card.expired": "Expired"
+  "home.card.expired": "Expired",
+  "s2arm.users.manage": "User Management",
+  "s2arm.users.hint": "Choose the local user profile for game saves and input mappings.",
+  "s2arm.users.select": "Select",
+  "s2arm.users.create": "Create User",
+  "s2arm.users.newName": "New user name",
+  "s2arm.users.rename": "Rename Selected User",
+  "s2arm.users.reload": "Reload",
+  "s2arm.users.name": "User name",
+  "s2arm.users.new": "New user",
+  "s2arm.users.refresh": "Refresh",
+  "s2arm.users.done": "Done"
 }

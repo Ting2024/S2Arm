@@ -38,6 +38,8 @@ typedef struct s2a_launch_ctx {
     char game_data[S2A_LCTX_PATH];    // 资源包根（S2A_GAME_DATA）
     char ryu_data[S2A_LCTX_PATH];     // Ryujinx 数据根（S2A_RYU_DATA，存档在这下面）
     char docs[S2A_LCTX_PATH];         // 文档根（S2A_DOCS：wire / 补丁 / 档位梯子 / threads.txt / env.txt …）
+    char session_user[4096];          // 本局账号JSON；空 = 未绑定账号，绝不打印
+    char user_id[7];                 // 显式用户路径选择；空 = 旧入口（不是账号能力声明）
     char log_dir[S2A_LCTX_PATH];      // host.log 所在（本刀进程级 = $HOME/Documents）
 } s2a_launch_ctx;
 
@@ -46,6 +48,11 @@ int s2a_launch_ctx_resolve(s2a_launch_ctx *c, const char *exe_dir, const char *h
 // 多款容器（③）的纯解析：bundle_dir = App 包根，home = $HOME；校验 gid 字符（[A-Za-z0-9._-]、不以 . 开头）、gid 在 <包根>/s2a_catalogue.json 的 title_id 里、
 //   Games/<gid>/ 是目录、Frameworks/S2AImages-<gid>.dylib 是文件。成功回 0（source = S2A_LCTX_CONTAINER）；失败回 -1，why 写原因，结构清空
 int s2a_launch_ctx_resolve_game(s2a_launch_ctx *c, const char *bundle_dir, const char *home, const char *gid, char *why, size_t why_n);
+// 用户路径 v1：只从规范用户编号派生，拒绝沙盒内部链接。只读解析、不建目录、不设环境。
+// 01保留旧路径；其它用户 docs/state 在 games/<gid>/S2A/users/<id> 下；game_data仍共享。
+// 这只是路径子合同，不证明账号描述符/缓存绑定已完成，不得据此开放多用户UI。
+int s2a_launch_ctx_resolve_user_paths(s2a_launch_ctx *c, const char *bundle_dir, const char *home,
+                                    const char *gid, const char *user_id, char *why, size_t why_n);
 // 包根是不是多款容器布局（有 s2a_catalogue.json 且有 Games/ 目录）
 int s2a_launch_ctx_is_container_dir(const char *bundle_dir);
 // 本进程是不是多款容器模式（③：容器布局且没设 S2A_LAUNCH_CTX）；只看包根与环境，不冻结、不读任何一款的文件，构造期可调
@@ -61,6 +68,20 @@ const char *s2a_launch_ctx_select(const char *gid);
 //   NEEDS_RESIGN = 这款程序包签名对不上本机这份 App（注册签名 / 库校验失败、或程序库和清单 image_sha256 不符）→ 在电脑上重新签名推回去
 enum { S2A_SELECT_OTHER = 0, S2A_SELECT_APP_INCOMPLETE = 1, S2A_SELECT_STORAGE = 2, S2A_SELECT_NEEDS_UPDATE = 3, S2A_SELECT_NEEDS_RESIGN = 4 };
 int s2a_launch_ctx_select_kind(void);
+// 多款容器在上一局完整退休（s2a_host_stop）返回游戏库后，清除已选标记以允许重新选择游戏。
+void s2a_launch_ctx_reset_selection(void);
+// 与select共用一次性锁；先验证用户派生路径再冻结。仅供后续完整账号桥接使用；
+// 当前生产库仍调旧select，禁止把本函数存在视为完整账号+缓存能力。
+const char *s2a_launch_ctx_select_user_paths(const char *gid, const char *user_id);
+// 完整账号输入的原生边界。字符串仅调用期间有效，成功后描述符按值冻结。
+// uid: 01必须NULL；其他用户必须稳定的32位小写非零Horizon UID。
+// 不执行能力导出函数（避免提前启动托管运行时读取旧环境）；只认实际链接的服务标记。
+typedef struct s2a_launch_user_v1 {
+    unsigned version;
+    const char *id, *name, *account_uid;
+} s2a_launch_user_v1;
+int s2a_launch_ctx_account_service_v1(void);
+const char *s2a_launch_ctx_select_user(const char *gid, const s2a_launch_user_v1 *user);
 // 宿主约定号核对（11-16，runtime/include/s2a_host_abi.h S2A_HOST_ABI）：这款产物上记的号——程序包自带的清单 program_catalogue
 //   （程序挪出 App 后随程序走的 program/catalogue.json：{schema, title_id, host_abi, chain, rewriter_id, image, image_sha256}）优先；
 //   它不在（NULL 或文件不存在）退回 App 包根清单 app_catalogue（s2a_catalogue.json）里这款的条目；都没记 host_abi = 本字段之前出的包，按 1。

@@ -103,13 +103,20 @@ extension S2ArmLauncherModel {
     ///   玩家 2–4 = 这款文件夹里的 input-pN.json（键位设置按玩家保存），没存过 / 存坏了就沿用玩家 1 的键位——
     ///   起局时这几位没存就是照玩家 1 的那份进游戏（build.py 不带、宿主落回全局映射），弹窗显示要跟实际玩的一致。
     /// 游戏库结构 v3 起键位在每款自己的文件夹（作业层 layout 把旧的 mappings/<号>.json 搬进去了）；原先还读 mappings/ 永远读不到，存过的键位重开显示成默认
-    func loadInput(gameID: String, player: Int = 1) -> LoadedInput {
+    func loadInput(gameID: String, player: Int) -> LoadedInput {
         let env = provider.client.environment
         var problem = false
         let file = player == 1 ? "input.json" : "input-p\(player).json"
         if let path = games.first(where: { $0.id == gameID })?.location.file(file) {
             if let data = try? Data(contentsOf: path) {
                 if let config = try? JSONDecoder().decode(InputConfig.self, from: data) { return LoadedInput(config: config, problem: false) }
+                problem = true
+            }
+        }
+        if player == 1, !env.library.isEmpty {
+            let mappingPath = URL(fileURLWithPath: env.library).appendingPathComponent("mappings/\(gameID).json")
+            if let data = try? Data(contentsOf: mappingPath) {
+                if let config = try? JSONDecoder().decode(InputConfig.self, from: data) { return LoadedInput(config: config, problem: problem) }
                 problem = true
             }
         }
@@ -121,9 +128,43 @@ extension S2ArmLauncherModel {
 
     /// 存这款的键位（saveInput 作业，player 1–4：1 = input.json，2–4 = input-pN.json，作业层校验后原子写）。
     /// 没配游戏库不起作业；作业层拒收抛 JobFailure，message 是作业层原句。
-    func saveInput(_ config: InputConfig, gameID: String, player: Int = 1) async throws {
+    func saveInput(_ config: InputConfig, gameID: String, player: Int) async throws {
         guard !provider.client.environment.library.isEmpty else { throw JobClientError(LibraryProvider.noLibraryMessage) }
         let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config))
         _ = try await provider.client.perform("saveInput", extra: ["config": object, "gameId": gameID, "player": player])
+    }
+
+
+    func loadInput(gameID: String, userID: String? = nil) -> LoadedInput {
+        let env = provider.client.environment
+        let user = userID ?? selectedUserID
+        if user == "01" {
+            return loadInput(gameID: gameID, player: 1)
+        }
+        var problem = false
+        if !env.library.isEmpty {
+            let userPath = URL(fileURLWithPath: env.library).appendingPathComponent("mappings/users/\(user)/\(gameID).json")
+            if let data = try? Data(contentsOf: userPath) {
+                if let config = try? JSONDecoder().decode(InputConfig.self, from: data) {
+                    return LoadedInput(config: config, problem: problem)
+                }
+                problem = true
+            }
+        }
+        if let data = try? Data(contentsOf: env.privateRoot.appendingPathComponent("default-input.json")),
+           let config = try? JSONDecoder().decode(InputConfig.self, from: data) {
+            return LoadedInput(config: config, problem: problem)
+        }
+        return LoadedInput(config: .standard, problem: problem)
+    }
+
+    func saveInput(_ config: InputConfig, gameID: String, userID: String? = nil) async throws {
+        guard !provider.client.environment.library.isEmpty else { throw JobClientError(LibraryProvider.noLibraryMessage) }
+        let user = userID ?? selectedUserID
+        if let registry = userRegistry, !registry.users.contains(where: { $0.id == user }) {
+            throw JobClientError("所选用户不存在，没有保存输入配置。")
+        }
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config))
+        _ = try await provider.client.perform("saveInput", extra: ["config": object, "gameId": gameID, "userId": user])
     }
 }

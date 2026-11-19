@@ -58,28 +58,30 @@ struct SaveManageSheet: View {
     let gameID: String
     /// 拖到游戏库这款卡片上的存档（LauncherView+Library）：打开就先检查它，同拖进本窗口
     let source: URL?
+    let user: LauncherUser
     @StateObject private var state = SaveSheetState()
     @State private var confirming = false
     @State private var dropTargeted = false
 
-    init(model: S2ArmLauncherModel, gameID: String, source: URL? = nil) {
+    init(model: S2ArmLauncherModel, gameID: String, source: URL? = nil, user: LauncherUser? = nil) {
         self.model = model
         self.gameID = gameID
         self.source = source
+        self.user = user ?? model.selectedUser ?? LauncherUser(id: model.selectedUserID, name: "Player 1")
     }
 
     private static let backupType = UTType(exportedAs: "org.s2arm.save-backup", conformingTo: .zip)
     private var game: GameSummary? { model.games.first { $0.id == gameID } }
     private var gameName: String { game?.name ?? gameID }
-    /// 别的作业（一局、出包、导入……）在跑，或弹窗自己在跑：存档动作先不让点。
-    private var blocked: Bool { model.busy || state.busy }
+    /// 仅相同资源的冲突任务或本弹窗动作占用时阻止；手机传输不占Mac用户存档。
+    private var blocked: Bool { state.busy || model.busy }
 
     private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                LauncherSheetHeading(t("save.title"), subtitle: gameName)
+                LauncherSheetHeading(t("save.title"), subtitle: gameName + " · " + user.id + " " + user.name)
                 Text(t("save.hint")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                 // 存档位置 SaveData：原生存档放进去下次起局就用（services SaveFolder.cs）；上次没读进来的原因写在这里
@@ -249,8 +251,8 @@ struct SaveManageSheet: View {
     }
 
     private func refresh() {
-        state.run(.status, failed: reason) { [model, gameID, state] events in
-            state.setStatus(try await model.saveStatus(gameID, events: events))
+        state.run(.status, failed: reason) { [model, gameID, user, state] events in
+            state.setStatus(try await model.saveStatus(gameID, userID: user.id, events: events))
         }
     }
 
@@ -266,8 +268,8 @@ struct SaveManageSheet: View {
         panel.nameFieldStringValue = "\(safe) \(stamp.string(from: Date())).s2asave"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let done = t("save.backupDone")
-        state.run(.backup, failed: reason) { [model, gameID, state] events in
-            let path = try await model.saveBackup(gameID, to: url, events: events)
+        state.run(.backup, failed: reason) { [model, gameID, user, state] events in
+            let path = try await model.saveBackup(gameID, userID: user.id, to: url, events: events)
             state.setResult(String(format: done, URL(fileURLWithPath: path).lastPathComponent))
         }
     }
@@ -285,8 +287,8 @@ struct SaveManageSheet: View {
 
     private func inspect(_ url: URL) {
         state.setPreview(nil)
-        state.run(.inspect, failed: reason) { [model, gameID, state] events in
-            state.setPreview(try await model.saveInspect(gameID, source: url, events: events))
+        state.run(.inspect, failed: reason) { [model, gameID, user, state] events in
+            state.setPreview(try await model.saveInspect(gameID, userID: user.id, source: url, events: events))
         }
     }
 
@@ -304,10 +306,10 @@ struct SaveManageSheet: View {
     private func restore() {
         guard let preview = state.preview else { return }
         let kept = t("save.restoreDone"), plain = t("save.restoreDoneNoOriginal")
-        state.run(.restore, failed: reason) { [model, gameID, state, loc] events in
-            let r = try await model.saveRestore(gameID, preview: preview, events: events)
+        state.run(.restore, failed: reason) { [model, gameID, user, state, loc] events in
+            let r = try await model.saveRestore(gameID, userID: user.id, preview: preview, events: events)
             state.setPreview(nil)
-            if let s = try? await model.saveStatus(gameID) { state.setStatus(s) }
+            if let s = try? await model.saveStatus(gameID, userID: user.id) { state.setStatus(s) }
             if !r.cleanupWarning.isEmpty { state.setResult(loc.backend(r.cleanupWarning), warns: true) }
             else { state.setResult(r.hadOriginal ? kept : plain) }
         }

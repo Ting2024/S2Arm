@@ -188,7 +188,7 @@ public static partial class SaveTransfer
         //   刚存的进度就在副本里（stderr 记一句）。iCloud 自动同步（sync）照旧拒绝
         bool sync = c.Request["sync"]?.GetValue<bool>() == true;
         bool changed = c.Request["archiveSha256"]?.GetValue<string>() != archive.Sha || c.Request["targetFingerprint"]?.GetValue<string>() != fingerprint;
-        Require(!(sync && changed), T("备份或目标已变化，请重新检查后确认。", "The backup or target has changed. Check again, then confirm."), "save_changed");
+        Require(!((sync || c.SessionBinding != null) && changed), T("备份或目标已变化，请重新检查后确认。", "The backup or target has changed. Check again, then confirm."), "save_changed");
         if (changed) Console.Error.WriteLine("S2A 存档恢复：检查之后备份或当前存档又变了，按现在的内容恢复（恢复前副本在这次执行时现拍）");
         long total = Scan(c.Root).Files.Sum(p => p.Value) + archive.Manifest["files"].AsArray().Sum(f => f["size"].GetValue<long>());
         Space(c.Work, checked(2 * total + (64 << 20)));

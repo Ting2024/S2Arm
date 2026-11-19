@@ -10326,5 +10326,133 @@
  {
   "source": "这次签好的 S2Arm 没带「提高内存上限」权限：装上后能玩，但大游戏可能内存不够、开局中止。",
   "en": "The S2Arm signed this time is missing the \"Increased Memory Limit\" entitlement: it installs and runs, but large games may run out of memory and stop at launch."
+ },
+ {
+  "source": "运行产物校验清单无效。",
+  "en": "The runtime artifact verification manifest is invalid."
+ },
+ {
+  "source": "运行宿主尚未确认所选用户账号接口，已停止启动。",
+  "en": "The runtime host has not confirmed support for the selected user account interface; launch aborted."
+ },
+ {
+  "source": "隐式旧账号启动不能附带用户描述符。",
+  "en": "An implicit legacy launch cannot attach a user descriptor."
+ },
+ {
+  "source": "已更新通用运行组件；游戏资源和着色器无需重新准备。",
+  "en": "Updated the shared runtime host; game resources and shaders do not need to be prepared again."
+ },
+ {
+  "source": "运行组件包含符号链接。",
+  "en": "The runtime host bundle contains symbolic links."
+ },
+ {
+  "source": "新版运行组件与这款游戏的产物接口不兼容，需要重新准备游戏。",
+  "en": "The updated runtime host is incompatible with this game's build ABI; please prepare the game again."
+ },
+ {
+  "source": "内置运行组件清单不完整。",
+  "en": "The bundled runtime host manifest is incomplete."
+ },
+ {
+  "source": "运行组件缓存不能是符号链接。",
+  "en": "The runtime host cache path cannot be a symbolic link."
+ },
+ {
+  "source": "运行组件签名校验失败，请重新安装完整 S2Arm。",
+  "en": "Runtime host signature verification failed; please reinstall the complete S2Arm app."
+ },
+ {
+  "source": "当前游戏账号无效，无法确定存档导入目标",
+  "en": "The current game account is invalid; cannot determine the save import target."
+ },
+ {
+  "source": "所选用户尚未建立游戏账号，请先运行游戏并存档",
+  "en": "The selected user has no game account yet; launch the game and create a save first."
+ },
+ {
+  "source": "此运行宿主未确认支持多用户账号接口，请更新运行组件",
+  "en": "This runtime host has not confirmed support for the multi-user account interface; please update the runtime host."
+ },
+ {
+  "source": "无法确认此运行宿主支持多用户账号接口",
+  "en": "Unable to verify multi-user account interface support on this runtime host."
+ },
+ {
+  "source": "此运行宿主支持多用户账号接口 v1",
+  "en": "This runtime host supports multi-user account interface v1."
+ },
+ {
+  "source": "无法读取此运行宿主的多用户账号接口",
+  "en": "Unable to read the multi-user account interface of this runtime host."
+ },
+ {
+  "source": "用户编号无效。",
+  "en": "Invalid user ID."
+ },
+ {
+  "source": "用户名须为非空文字，不能含控制字符或首尾空格，UTF-8 长度不能超过 32 字节。",
+  "en": "User name must be non-empty without leading/trailing whitespace or control characters, and within 32 UTF-8 bytes."
+ },
+ {
+  "source": "用户数据目录包含链接，已停止操作。",
+  "en": "User data directory contains a symbolic link; operation stopped."
+ },
+ {
+  "source": "不支持的用户管理操作。",
+  "en": "Unsupported user management operation."
+ },
+ {
+  "source": "请先刷新用户列表，再修改用户。",
+  "en": "Please refresh the user list before updating users."
+ },
+ {
+  "source": "游戏标识无效，无法选择用户数据目录。",
+  "en": "Invalid game ID; cannot resolve user data directory."
+ },
+ {
+  "source": "游戏标识无效，无法选择用户输入配置。",
+  "en": "Invalid game ID; cannot resolve user input configuration."
+ },
+ {
+  "source": "用户输入配置目录不是普通目录，已停止启动。",
+  "en": "User input configuration directory is not a regular directory; launch stopped."
+ },
+ {
+  "source": "用户资料损坏或版本不受支持，已停止操作；没有重置用户或存档。",
+  "en": "User profile data is corrupted or has an unsupported version; operation stopped without resetting users or saves."
+ },
+ {
+  "source": "用户资料锁文件无效。",
+  "en": "Invalid user profile lock file."
+ },
+ {
+  "source": "用户列表已变化，请刷新后重试。",
+  "en": "The user list changed. Please refresh and try again."
+ },
+ {
+  "source": "所选用户不存在，请刷新用户列表。",
+  "en": "The selected user does not exist. Please refresh the user list."
+ },
+ {
+  "source": "用户输入配置文件包含链接或不是普通文件，已停止启动。",
+  "en": "User input configuration file is a link or not a regular file; launch stopped."
+ },
+ {
+  "source": "用户缓存文件包含链接或不是普通文件，已停止启动。",
+  "en": "User cache file is a link or not a regular file; launch stopped."
+ },
+ {
+  "source": "另一项操作正在修改用户，请稍后重试。",
+  "en": "Another operation is modifying users. Please try again later."
+ },
+ {
+  "source": "用户数量已达到上限。",
+  "en": "The maximum number of users has been reached."
+ },
+ {
+  "source": "用户1",
+  "en": "User 1"
  }
 ]

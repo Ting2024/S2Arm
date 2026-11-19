@@ -68,6 +68,7 @@ struct JobSession: Equatable {
     enum Kind: String, CaseIterable { case play, export, prepare, install, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
                         keys, delete, diagnostics, moveGame, clearCache, installTV = "tvInstall", exportTV = "tvExport", pushSelected }
     enum Phase: Equatable { case running, stopping, finished(JobOutcome.State) }
+    let id = UUID()
     let kind: Kind
     let gameID: String?
     let name: String
@@ -153,6 +154,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     let home = HomeLibraryState()
     let gamepad = LauncherPadNavigation()
     var playSessionActive: Bool {
+        if hasRunningGames { return true }
         guard let session, session.kind == .play else { return false }
         if case .finished = session.phase { return false }
         return true
@@ -170,11 +172,43 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 出包平台的勾选没能写盘。
     @Published private(set) var choiceError: String?
     @Published var session: JobSession? {   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
-        didSet { if session?.started != oldValue?.started { sessionHidden = false } }
+        didSet { if session?.id != oldValue?.id || session?.started != oldValue?.started { sessionHidden = false } }
     }
     /// 手机作业（装到 iPhone / 导出自签包 / 从手机删 / 装回上一版 / 更新 iPhone 上的 S2Arm）单独一个槽（11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，
     ///   这个控制纯属多余，要放开」）：出包、一局、导入等别的作业照跑，手机作业同时跑。手机槽同一时刻一个作业，忙时再点的排队（phoneQueue），
     ///   要装的那款正被主槽占着（出包 / 删除 / 清缓存…）也排队，主槽那单结束接着装
+    struct PlaySession: Identifiable, Equatable {
+        let id: UUID
+        let user: LauncherUser
+        var job: JobSession
+        var running: RunningGame?
+    }
+    @Published private(set) var playSessions: [PlaySession] = []
+    var playSession: JobSession? { playSessions.count == 1 ? playSessions.first?.job : nil }
+    @Published private(set) var userRegistry: UserRegistry?
+    @Published var selectedUserID = "01"
+    @Published private(set) var usersBusy = false
+    @Published private(set) var usersError: String?
+    @Published var showUsers = false
+    var selectedUser: LauncherUser? { userRegistry?.users.first { $0.id == selectedUserID } }
+
+    func loadUsers() async {
+        guard !usersBusy else { return }
+        usersBusy = true; defer { usersBusy = false }
+        do { userRegistry = try await provider.users.list(); usersError = nil }
+        catch { usersError = error.localizedDescription }
+    }
+
+    func updateUser(id: String? = nil, name: String) async {
+        guard !usersBusy, let registry = userRegistry else { return }
+        usersBusy = true; defer { usersBusy = false }
+        do {
+            if let id { userRegistry = try await provider.users.rename(id: id, name: name, revision: registry.revision) }
+            else { userRegistry = try await provider.users.create(name: name, revision: registry.revision) }
+            usersError = nil
+        } catch { usersError = error.localizedDescription }
+    }
+
     @Published var phoneSession: JobSession? {
         didSet { if phoneSession?.started != oldValue?.started { phoneHidden = false } }
     }
@@ -599,7 +633,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var libraryConfirm: LibraryConfirm?
 
     func changeLibrary(to url: URL, move: Bool = false, accept: Set<String> = []) {
-        guard !busy else { return }
+        guard !busy, !hasRunningGames else { return }
         showEnvironment = false
         failAction(nil, game: nil)
         start(.setupLibrary, game: nil, name: url.lastPathComponent) { [weak self] sink in
@@ -1255,71 +1289,106 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     // ---- play ----
 
-    func play(_ game: GameSummary, uiLanguage: String?) {
-        guard !busy, !cloudSyncing else { return }
+    func isPlaying(gameID: String, userID: String? = nil) -> Bool {
+        playSessions.contains { !isFinished($0.job) && $0.job.gameID == gameID && (userID == nil || $0.user.id == userID) }
+    }
+    var hasRunningGames: Bool { playSessions.contains { !isFinished($0.job) } }
+    var playingGameID: String? { playSessions.first { !isFinished($0.job) }?.job.gameID }
+
+    func play(_ game: GameSummary, uiLanguage: String?, userID: String? = nil) {
         failAction(nil, game: nil)
-        // 崩了能恢复（11-13 维护者改定：开局前不问）：上次开着某几条时异常退出，作业层已当场关掉（pack/jobs/cheats.py note_crash）→
-        //   这次照常开局，同时弹一条通知说关了什么、想用去设置里再开；读不到记录照常开局
+        guard !cloudSyncing else { return }
+        if userRegistry != nil || usersError != nil {
+            guard let user = userRegistry?.users.first(where: { $0.id == (userID ?? selectedUserID) }) else {
+                failAction("用户资料无效，请刷新用户列表；没有更改所选用户。", game: game.id); return
+            }
+            playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: true)
+            return
+        }
+        let player = userID == nil ? Self.launchPlayer() : nil
+        let user: LauncherUser
+        if let userID {
+            user = LauncherUser(id: userID, name: "Player 1")
+        } else if let player {
+            user = LauncherUser(id: player.isFirst ? selectedUserID : player.uid, name: player.name.isEmpty ? "Player 1" : player.name)
+        } else {
+            user = LauncherUser(id: selectedUserID, name: "Player 1")
+        }
         Task {
             let names = (try? await crashedBeforePlay(game.id)) ?? []
             if !names.isEmpty {
                 crashPrompt = CrashPrompt(game: game, uiLanguage: uiLanguage, names: names)
                 _ = try? await saveJob("communitySave", gameID: game.id, extra: ["crashAnswer": "ack"])
             }
-            playChecked(game, uiLanguage: uiLanguage)
+            playChecked(game, uiLanguage: uiLanguage, user: user, player: player)
         }
     }
 
     private func crashedBeforePlay(_ gameID: String) async throws -> [String] {
         let result = try await saveJob("community", gameID: gameID, extra: [:])
-        // 帧率补丁那条（kind fps）、满屏开关那条（kind fs，自适应满屏一族跟它走）没有补丁名（作业层 cheats.note_crash / note_stall）：交 CrashPromptHost 按界面语言写「帧率」「满屏」
         return (result["crashed"] as? [[String: Any]] ?? []).compactMap {
             switch $0["kind"] as? String { case "fps": return CrashPrompt.fpsName; case "fs": return CrashPrompt.fullscreenName; default: return $0["name"] as? String } }
     }
 
-    private func playChecked(_ game: GameSummary, uiLanguage: String?) {
-        guard !busy, !cloudSyncing else { return }
-        // 不按前端的环境检查结果拦（剃刀 M4）：launch 作业自己校验运行文件与环境，缺什么回真实原因
-        // 开了 iCloud 存档：先取回 / 处理冲突再开局（S2ArmLauncherModel+CloudSaves）；同步失败本地存档没动，照常开局、错误行写原因
+    private func playChecked(_ game: GameSummary, uiLanguage: String?, user: LauncherUser, player: LocalPlayer? = nil) {
+        guard !mainBusy, !cloudSyncing else { return }
         if cloudFolder != nil {
             cloudSyncing = true
             Task {
                 let why = await cloudSync(game.id)
                 cloudSyncing = false
-                // 同步期间别的作业（导出 / 导入）可能已经开始：这时不开局，免得盖掉它的会话（11-09 审查）
-                if busy { failAction(Self.cloudBusyAfterSync, game: game.id); return }
-                startPlay(game, uiLanguage: uiLanguage)
+                if mainBusy { failAction(Self.cloudBusyAfterSync, game: game.id); return }
+                playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: false, player: player)
                 if let why { failAction(Self.cloudFailure(why), game: game.id) }
             }
             return
         }
-        startPlay(game, uiLanguage: uiLanguage)
+        playForUser(game, uiLanguage: uiLanguage, user: user, useRegistry: false, player: player)
     }
 
-    private func startPlay(_ game: GameSummary, uiLanguage: String?) {
-        // The helper accepts one consumer. Release the launcher's reader before
-        // the host can connect, including launches initiated by the control port.
+    private func playForUser(_ game: GameSummary, uiLanguage: String?, user: LauncherUser, useRegistry: Bool, player: LocalPlayer? = nil) {
+        guard !isPlaying(gameID: game.id, userID: user.id) else {
+            failAction("同一游戏和用户已有一局在运行，请先停止。", game: game.id); return
+        }
+        guard !mainBusy else {
+            failAction("有其他后台任务正在运行，请稍后重试。", game: game.id); return
+        }
         gamepad.releaseRelay()
         let relaySocket = controller.relaySocketForGame()
         var controllerArguments: [String: String] = [
-            "switch2ProAutoConnect": relaySocket == nil ? "0" : "1",   // 有通道就让游戏自己接（还没连上时游戏会重试）
+            "switch2ProAutoConnect": relaySocket == nil ? "0" : "1",
         ]
         if let relaySocket { controllerArguments["switch2ProRelaySocket"] = relaySocket }
-        // 本地玩家（#623）：顶栏选的玩家随 launch 请求给作业层（pack/jobs/build.py runtime_env → 服务层 S2A_PLAYER_USER / 这个玩家的 SaveData）；没建过玩家不带（旧行为）
-        if let player = Self.launchPlayer() {
+        if let player = player ?? (useRegistry ? nil : Self.launchPlayer()) {
             controllerArguments["playerUser"] = player.serviceUser
             controllerArguments["playerName"] = player.name
             controllerArguments["playerFolder"] = player.folder
         }
         controllerGameStarted = false
+        let id = UUID()
+        let job = JobSession(kind: .play, gameID: game.id, name: game.name)
+        playSessions.append(PlaySession(id: id, user: user, job: job))
+        if !useRegistry { session = job }
         do {
-            let sink = EventSink { [weak self] event in self?.ingest(event) }
-            running = try provider.run(InstalledGame(gameId: game.id, name: game.name),
-                                       settings: S2ArmAppleAdapter.Settings(
-                                        values: controllerArguments,
-                                        uiLanguage: uiLanguage), events: sink)
-            session = JobSession(kind: .play, gameID: game.id, name: game.name)
+            let sink = EventSink { [weak self] event in
+                DispatchQueue.main.async { self?.ingestPlay(event, id: id) }
+            }
+            let handle = try provider.run(
+                InstalledGame(gameId: game.id, name: game.name),
+                settings: S2ArmAppleAdapter.Settings(
+                    values: controllerArguments,
+                    uiLanguage: uiLanguage,
+                    userId: useRegistry ? user.id : nil
+                ),
+                events: sink
+            )
+            if !useRegistry { running = handle }
+            if let index = playSessions.firstIndex(where: { $0.id == id }), !isFinished(playSessions[index].job) {
+                playSessions[index].running = handle
+            }
         } catch {
+            playSessions.removeAll { $0.id == id }
+            if !useRegistry, session?.id == job.id { session = nil }
             failAction(error.localizedDescription, game: game.id)
         }
     }
@@ -1341,6 +1410,68 @@ public final class S2ArmLauncherModel: ObservableObject {
         launchPlayer(defaults).map { ["user": $0.serviceUser, "name": $0.name, "folder": $0.folder] }
     }
     func shutdownControllerConnection() { controller.shutdown() }
+
+    private func ingestPlay(_ event: EngineEvent, id: UUID) {
+        guard let index = playSessions.firstIndex(where: { $0.id == id }),
+              !isFinished(playSessions[index].job), event.ev != "heartbeat" else { return }
+        var play = playSessions[index].job
+        if let taskId = event.fields["taskId"] as? String, !taskId.isEmpty { play.taskID = taskId }
+        if let stage = event.stage {
+            play.stage = stage
+            if event.ev == "stage", play.stages.last != stage { play.stages.append(stage) }
+            if event.fields["stageKey"] as? String == "game_running" {
+                if let gid = play.gameID { home.recordPlay(gid) }
+                controllerGameStarted = true
+                controller.gameDidStart()
+            }
+        }
+        if !event.message.isEmpty {
+            play.message = event.message
+            play.log.append(event.message)
+            if play.log.count > Self.logLimit { play.log.removeFirst(play.log.count - Self.logLimit) }
+        }
+        if event.isFinal {
+            let state = JobOutcome.State(rawValue: event.fields["state"] as? String ?? "") ?? .interrupted
+            play.phase = .finished(state)
+            play.ended = Date()
+            if controllerGameStarted {
+                controllerGameStarted = false
+                controller.gameDidExit()
+            }
+            if let gid = play.gameID, cloudFolder != nil {
+                cloudSyncing = true
+                Task {
+                    let why = await cloudSync(gid)
+                    cloudSyncing = false
+                    if let why { failAction(Self.cloudFailure(why), game: gid) }
+                }
+            }
+            if state == .completed, (event.fields["result"] as? [String: Any])?["returnToLibrary"] as? Bool == true {
+                backToLibrary()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+        playSessions[index].job = play
+        if session?.id == play.id { session = play }
+        if event.isFinal { refresh() }
+    }
+
+    func stopPlay(id: UUID) {
+        guard let index = playSessions.firstIndex(where: { $0.id == id }),
+              let running = playSessions[index].running, playSessions[index].job.phase == .running else { return }
+        playSessions[index].job.phase = .stopping
+        if session?.id == playSessions[index].job.id { session = playSessions[index].job }
+        provider.control(running, .stop)
+    }
+
+    @discardableResult func stopPlay(taskID: String) -> Bool {
+        guard let play = playSessions.first(where: { ($0.running?.taskId == taskID || $0.job.taskID == taskID) && !isFinished($0.job) }) else { return false }
+        stopPlay(id: play.id); return true
+    }
+
+    func dismissPlayResult(id: UUID) {
+        playSessions.removeAll { $0.id == id && isFinished($0.job) }
+    }
 
     // ---- 放密钥 / 删除 / 诊断（本机控制口用；参数与作业同旧启动器）----
 
@@ -1779,6 +1910,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     func stop() {
         guard var session = session, session.phase == .running else { return }
+        if session.kind == .play, let play = playSessions.first(where: { $0.job.id == session.id }) { stopPlay(id: play.id); return }
         session.phase = .stopping
         self.session = session
         if session.kind == .play, let running { provider.control(running, .stop) }

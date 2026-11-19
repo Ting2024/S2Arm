@@ -11,19 +11,19 @@ import socket
 import time
 
 
-def try_lock(f):
+def try_lock(f, shared=False):
     if os.name == 'nt':
         import msvcrt
         f.seek(0)
         try:
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBRLCK if shared else msvcrt.LK_NBLCK, 1)
         except OSError as error:
             if error.errno in (errno.EACCES, errno.EDEADLK):
                 raise BlockingIOError(error.errno, 'Library lock is already held') from None
             raise
     else:
         import fcntl
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(f, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
 
 
 def unlock(f):
@@ -99,14 +99,14 @@ def holder_is_stale(holder, *, current_host=None, windows=None, pid_start=None):
 
 
 @contextlib.contextmanager
-def held(lock, *, wait_s=0.0, holder=None, on_wait=None, poll=0.5):
+def held(lock, *, wait_s=0.0, holder=None, on_wait=None, poll=0.5, shared=False):
     """拿 lock（Path）：拿不到每 poll 秒再试，最多等 wait_s 秒，期间占锁者变了就调 on_wait(holder, 已等秒数)；到上限抛 Busy。
     拿到后写 holder（JSON）到旁挂文件，放锁时删掉（只删自己写的那份）。崩溃留下的旁挂文件不影响拿锁，下一个拿到的直接覆盖"""
     with open(lock, 'a') as f:
         t0, seen = time.monotonic(), None
         while True:
             try:
-                try_lock(f)
+                try_lock(f, shared=shared)
                 break
             except BlockingIOError:
                 info, waited = read_holder(lock), time.monotonic() - t0
@@ -118,13 +118,13 @@ def held(lock, *, wait_s=0.0, holder=None, on_wait=None, poll=0.5):
                 time.sleep(min(poll, max(0.0, wait_s - waited)))
         mine = holder_path(lock)
         try:
-            if holder is not None:
+            if holder is not None and not shared:
                 tmp = mine.with_name(mine.name + '.%d.tmp' % os.getpid())
                 tmp.write_text(json.dumps(holder, ensure_ascii=False), encoding='utf-8')
                 os.replace(tmp, mine)
             yield
         finally:
-            if holder is not None and read_holder(lock) == holder:
+            if holder is not None and not shared and read_holder(lock) == holder:
                 with contextlib.suppress(OSError):
                     mine.unlink()
             unlock(f)

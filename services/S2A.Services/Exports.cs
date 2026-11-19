@@ -157,7 +157,10 @@ namespace S2A.Services
             }
         }
 
-        [UnmanagedCallersOnly(EntryPoint = "S2A_Init")]
+        [UnmanagedCallersOnly(EntryPoint = "S2A_LauncherAccount_v1")]
+        public static int LauncherAccountVersion() => 1;
+
+                [UnmanagedCallersOnly(EntryPoint = "S2A_Init")]
         public static void Init()
         {
             try { Initialize(); }

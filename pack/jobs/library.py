@@ -3006,7 +3006,14 @@ def save_input(c):
         raise Failure("无效的玩家序号。")
     if c.r.get("gameId"):
         c.game()
-        target = layout.path(c, c.r["gameId"], "input.json" if player == 1 else f"input-p{player}.json")
+        if player == 1:
+            from users import input_path, selected
+            target = input_path(c, c.r["gameId"])
+            atomic(target, config)
+            if selected(c)["id"] == "01":
+                atomic(layout.path(c, c.r["gameId"], "input.json"), config)
+            return {}
+        target = layout.path(c, c.r["gameId"], f"input-p{player}.json")
     else:
         target = c.private / "default-input.json"
     atomic(target, config)

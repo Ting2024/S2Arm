@@ -53,6 +53,7 @@ public final class S2ArmEngineProvider: EngineProvider {
     public let environment: EnvironmentService
     public let installer: InstallService
     public let space: SpaceService
+    public let users: UserService
 
     public init(client: JobClient, xcodeLocator: @escaping () -> String? = XcodeLocator.detect) {
         self.client = client
@@ -62,6 +63,7 @@ public final class S2ArmEngineProvider: EngineProvider {
         environment = EnvironmentService(client: client, xcodeLocator: xcodeLocator)
         installer = InstallService(client: client)
         space = SpaceService(client: client)
+        users = UserService(client: client)
     }
 
     // MARK: inspect
@@ -266,10 +268,11 @@ public final class S2ArmEngineProvider: EngineProvider {
     /// 起一局：settings 只用 uiLanguage 与 Switch 2 Pro 的本机转发通道；游戏语言跟系统、主机模式、宽屏 / 60 帧都由作业层定。
     /// 事件：作业事件按序转出，最后一条是这局的结局（result）。
     public func run(_ game: InstalledGame, settings s: Settings, events: EventSink) throws -> RunningGame {
-        let handle = try play.play(gameId: game.gameId, uiLanguage: s.uiLanguage, arguments: Self.launchArguments(s),
+        let arguments = Self.launchArguments(s)
+        let handle = try play.play(gameId: game.gameId, userId: s.userId, uiLanguage: s.uiLanguage, arguments: arguments,
                                    onEvent: { if !$0.isFinal { events.emit(EngineEvent(job: $0)) } },
                                    onFinish: { events.emit(EngineEvent(outcome: $0)) })
-        return RunningGame(gameId: game.gameId, taskId: handle.id)
+        return RunningGame(userId: s.userId ?? "01", gameId: game.gameId, taskId: handle.id)
     }
 
     /// launch 请求里设置带的字段（作业层 pack/jobs/build.py runtime_env 读）
@@ -287,8 +290,7 @@ public final class S2ArmEngineProvider: EngineProvider {
     public func control(_ game: RunningGame, _ cmd: ControlCommand) {
         switch cmd {
         case .stop:
-            guard play.current?.id == game.taskId else { return }   // 不是这一局（已结束 / 别的局）不动
-            play.stop()
+            play.stop(taskId: game.taskId)
         }
     }
 
