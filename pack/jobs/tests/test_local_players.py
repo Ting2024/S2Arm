@@ -51,5 +51,18 @@ class LocalPlayerEnvTests(JobCase):
                 self.env(bad)
 
 
+    def test_local_players_list_passes_through_to_service_env(self):
+        gid = self.game()["id"]
+        players = [dict(user="first", name="P1", folder="SaveData"),
+                   dict(user=HONG, name="Hong", folder="SaveData-Hong")]
+        self.c.r["player"] = players[0]
+        self.c.r["localPlayers"] = players
+        with patch.dict(os.environ):
+            os.environ.pop("S2A_LOCAL_PLAYERS", None)
+            env = build.runtime_env(self.c, self.game(), self.root / "runtime")
+        import json
+        self.assertEqual(json.loads(env["S2A_LOCAL_PLAYERS"]), players)
+
+
 if __name__ == "__main__":
     unittest.main()

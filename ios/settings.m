@@ -304,6 +304,61 @@ NSDictionary *s2a_ios_graphics_snapshot(NSUserDefaults *defaults) {
     return snapshot;
 }
 
+// 本地玩家（#623，维护者 11-11）：游戏库（shell/Sources/S2ArmShellHost/LocalPlayers.swift）把玩家表写在 App 偏好 S2ALocalPlayers
+//   （数组，每项 {uid, name, folder}；第一项 uid 空串 = 第一个玩家）、当前玩家的 uid 写在 S2ALocalPlayer。按本机存，不在游戏数据目录里，删游戏不丢。
+//   这里只读、校验：表里没有当前那个 / 字段不对 → 第一个玩家；文件夹名只认一层、不以 . 开头、不含 /（防拼出本款文档根以外的路径），不对就按用户号起名
+static BOOL player_folder_ok(id v) {
+    if (![v isKindOfClass:NSString.class]) return NO;
+    NSString *s = v;
+    return s.length > 0 && s.length <= 120 && ![s hasPrefix:@"."] && [s rangeOfString:@"/"].location == NSNotFound && [s rangeOfString:@":"].location == NSNotFound;
+}
+static BOOL player_uid_ok(NSString *uid) {
+    if (uid.length != 32) return NO;
+    NSCharacterSet *bad = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+    return [uid rangeOfCharacterFromSet:bad].location == NSNotFound && ![uid isEqualToString:[@"" stringByPaddingToLength:32 withString:@"0" startingAtIndex:0]];
+}
+NSDictionary<NSString *, NSString *> *s2a_ios_local_player(NSUserDefaults *defaults) {
+    id list = [defaults objectForKey:@"S2ALocalPlayers"];
+    if (![list isKindOfClass:NSArray.class] || ![(NSArray *)list count]) return nil;
+    NSString *want = [defaults stringForKey:@"S2ALocalPlayer"] ?: @"";
+    NSDictionary *hit = nil;
+    for (id p in (NSArray *)list) {
+        if (![p isKindOfClass:NSDictionary.class] || ![p[@"uid"] isKindOfClass:NSString.class]) continue;
+        if (want.length && [p[@"uid"] isEqualToString:want] && player_uid_ok(want)) { hit = p; break; }
+    }
+    NSString *name = @"";
+    if (!hit) {   // 第一个玩家：表里 uid 空串那项的名字
+        for (id p in (NSArray *)list)
+            if ([p isKindOfClass:NSDictionary.class] && [p[@"uid"] isEqual:@""] && [p[@"name"] isKindOfClass:NSString.class]) { name = p[@"name"]; break; }
+        return @{@"uid": @"", @"name": name, @"folder": @"SaveData"};
+    }
+    if ([hit[@"name"] isKindOfClass:NSString.class]) name = hit[@"name"];
+    NSString *folder = player_folder_ok(hit[@"folder"]) && ![hit[@"folder"] isEqualToString:@"SaveData"] ? hit[@"folder"] : [@"SaveData-" stringByAppendingString:want];
+    return @{@"uid": want, @"name": name, @"folder": folder};
+}
+
+__attribute__((visibility("default"))) void s2a_local_player_persist(const char *uid_c, const char *name_c, const char *folder_c) {
+    @autoreleasepool {
+        if (!uid_c || !name_c || !folder_c) return;
+        NSString *uid = @(uid_c), *name = @(name_c), *folder = @(folder_c);
+        if (!player_uid_ok(uid) || !player_folder_ok(folder)) return;
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        id raw = [defaults objectForKey:@"S2ALocalPlayers"];
+        NSMutableArray *list = [raw isKindOfClass:NSArray.class] ? [(NSArray *)raw mutableCopy] : [NSMutableArray array];
+        BOOL hasFirst = NO, exists = NO;
+        for (id item in list) {
+            if (![item isKindOfClass:NSDictionary.class]) continue;
+            if ([item[@"uid"] isEqual:@""]) hasFirst = YES;
+            if ([item[@"uid"] isEqual:uid]) exists = YES;
+        }
+        if (!hasFirst) [list insertObject:@{@"uid": @"", @"name": @"", @"folder": @"SaveData"} atIndex:0];
+        if (!exists) [list addObject:@{@"uid": uid, @"name": name, @"folder": folder}];
+        [defaults setObject:list forKey:@"S2ALocalPlayers"];
+        if (![defaults objectForKey:@"S2ALocalPlayer"]) [defaults setObject:@"" forKey:@"S2ALocalPlayer"];
+        [defaults synchronize];
+    }
+}
+
 void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
     // 字符串与 Settings.bundle 一致。起局工具显式给出的环境变量优先。
     const struct {
@@ -455,6 +510,49 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         apply_environment("S2A_WIDESCREEN", @"0");
         fprintf(stderr, "[S2A 画面设置] S2A_WIDESCREEN=0（开着社区宽屏补丁，S2Arm 满屏让开）\n");
     }
+    // 存档位置 SaveData 与本地玩家（#623）：放在 apply_environment 里，跨款切换时 s2a_ios_reapply_graphics_settings 会按新选游戏的 S2A_DOCS 和当前玩家重算
+    NSDictionary<NSString *, NSString *> *player = getenv("S2A_PLAYER_USER") ? nil : s2a_ios_local_player(NSUserDefaults.standardUserDefaults);
+    if (!getenv("S2A_SAVE_FOLDER")) {
+        const char *d = getenv("S2A_DOCS");
+        NSString *docs = d && *d ? @(d) : NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        apply_environment("S2A_SAVE_FOLDER", [docs stringByAppendingPathComponent:player ? player[@"folder"] : @"SaveData"]);
+    }
+    if (player) {
+        apply_environment("S2A_PLAYER_USER", player[@"uid"].length ? player[@"uid"] : @"first");
+        if (player[@"name"].length && !getenv("S2A_PLAYER_NAME")) apply_environment("S2A_PLAYER_NAME", player[@"name"]);
+        fprintf(stderr, "[S2A 本地玩家] %s（%s），存档位置 %s\n", player[@"uid"].length ? player[@"uid"].UTF8String : "第一个玩家",
+                player[@"name"].length ? player[@"name"].UTF8String : "没改过名", getenv("S2A_SAVE_FOLDER"));
+    } else if (!getenv("S2A_PLAYER_USER")) {
+        apply_environment("S2A_PLAYER_USER", @"first");
+    }
+    if (!getenv("S2A_LOCAL_PLAYERS")) {
+        id list = [NSUserDefaults.standardUserDefaults objectForKey:@"S2ALocalPlayers"];
+        NSMutableArray *all = [NSMutableArray array];
+        BOOL hasFirst = NO;
+        if ([list isKindOfClass:NSArray.class] && [(NSArray *)list count]) {
+            for (id item in (NSArray *)list) {
+                if (![item isKindOfClass:NSDictionary.class] || ![item[@"uid"] isKindOfClass:NSString.class]) continue;
+                NSString *uid = item[@"uid"];
+                NSString *pname = [item[@"name"] isKindOfClass:NSString.class] ? item[@"name"] : @"";
+                if (!uid.length) {
+                    if (hasFirst) continue;
+                    hasFirst = YES;
+                    [all addObject:@{ @"user": @"first", @"name": pname, @"folder": @"SaveData" }];
+                } else if (player_uid_ok(uid)) {
+                    NSString *pfolder = player_folder_ok(item[@"folder"]) && ![item[@"folder"] isEqualToString:@"SaveData"]
+                        ? item[@"folder"] : [@"SaveData-" stringByAppendingString:uid];
+                    [all addObject:@{ @"user": uid, @"name": pname, @"folder": pfolder }];
+                }
+            }
+        }
+        if (!hasFirst) [all insertObject:@{ @"user": @"first", @"name": @"", @"folder": @"SaveData" } atIndex:0];
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:all options:0 error:nil];
+        if (jsonData) {
+            NSString *jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            if (jsonStr.length) apply_environment("S2A_LOCAL_PLAYERS", jsonStr);
+        }
+    }
+    s2a_ios_apply_diag_run(NSUserDefaults.standardUserDefaults);
 }
 
 void s2a_ios_reapply_graphics_settings(NSUserDefaults *defaults) {
@@ -533,39 +631,6 @@ void s2a_ios_apply_diag_run(NSUserDefaults *defaults) {
     for (size_t i = 0; i < sizeof vars / sizeof vars[0]; i++)
         if (!getenv(vars[i].name)) setenv(vars[i].name, vars[i].value.UTF8String, 1);
     fprintf(stderr, "[S2A 诊断局] 本局开逐通道读数（第 3600 / 7200 次出图），读数写 %s，下一局自动关\n", dir.fileSystemRepresentation);
-}
-
-// 本地玩家（#623，维护者 11-11）：游戏库（shell/Sources/S2ArmShellHost/LocalPlayers.swift）把玩家表写在 App 偏好 S2ALocalPlayers
-//   （数组，每项 {uid, name, folder}；第一项 uid 空串 = 第一个玩家）、当前玩家的 uid 写在 S2ALocalPlayer。按本机存，不在游戏数据目录里，删游戏不丢。
-//   这里只读、校验：表里没有当前那个 / 字段不对 → 第一个玩家；文件夹名只认一层、不以 . 开头、不含 /（防拼出本款文档根以外的路径），不对就按用户号起名
-static BOOL player_folder_ok(id v) {
-    if (![v isKindOfClass:NSString.class]) return NO;
-    NSString *s = v;
-    return s.length > 0 && s.length <= 120 && ![s hasPrefix:@"."] && [s rangeOfString:@"/"].location == NSNotFound && [s rangeOfString:@":"].location == NSNotFound;
-}
-static BOOL player_uid_ok(NSString *uid) {
-    if (uid.length != 32) return NO;
-    NSCharacterSet *bad = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
-    return [uid rangeOfCharacterFromSet:bad].location == NSNotFound && ![uid isEqualToString:[@"" stringByPaddingToLength:32 withString:@"0" startingAtIndex:0]];
-}
-NSDictionary<NSString *, NSString *> *s2a_ios_local_player(NSUserDefaults *defaults) {
-    id list = [defaults objectForKey:@"S2ALocalPlayers"];
-    if (![list isKindOfClass:NSArray.class] || ![(NSArray *)list count]) return nil;
-    NSString *want = [defaults stringForKey:@"S2ALocalPlayer"] ?: @"";
-    NSDictionary *hit = nil;
-    for (id p in (NSArray *)list) {
-        if (![p isKindOfClass:NSDictionary.class] || ![p[@"uid"] isKindOfClass:NSString.class]) continue;
-        if (want.length && [p[@"uid"] isEqualToString:want] && player_uid_ok(want)) { hit = p; break; }
-    }
-    NSString *name = @"";
-    if (!hit) {   // 第一个玩家：表里 uid 空串那项的名字
-        for (id p in (NSArray *)list)
-            if ([p isKindOfClass:NSDictionary.class] && [p[@"uid"] isEqual:@""] && [p[@"name"] isKindOfClass:NSString.class]) { name = p[@"name"]; break; }
-        return @{@"uid": @"", @"name": name, @"folder": @"SaveData"};
-    }
-    if ([hit[@"name"] isKindOfClass:NSString.class]) name = hit[@"name"];
-    NSString *folder = player_folder_ok(hit[@"folder"]) && ![hit[@"folder"] isEqualToString:@"SaveData"] ? hit[@"folder"] : [@"SaveData-" stringByAppendingString:want];
-    return @{@"uid": want, @"name": name, @"folder": folder};
 }
 
 void s2a_ios_load_graphics_settings(void) {
