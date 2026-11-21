@@ -4,6 +4,7 @@
 #import <GameController/GameController.h>
 #include "joycon_imu.h"
 #include "hid_generic.h"
+#include "pad_drivers/device.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -210,6 +211,7 @@ static void attach_device(IOHIDDeviceRef device) {
     pid = s2a_hidg_jc_body_pid(pid, name);   // 冒用 Joy-Con 产品号的第三方 Pro 按 Pro 认：六轴轴向、震动、拆不拆单只都照 Pro（D-52Z8）
     int slot = side_for_pid(pid);
     if (slot < 0) return;
+    if (s2a_device_driver(device, s2a_driver_key(device))) return;   // 扩展驱动独占这只的协议初始化
     CFTypeRef descriptor = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDReportDescriptorKey));
     if (descriptor && CFGetTypeID(descriptor) == CFDataGetTypeID() &&
         nintendo_reports(CFDataGetBytePtr((CFDataRef)descriptor), (size_t)CFDataGetLength((CFDataRef)descriptor)) == 0) return;

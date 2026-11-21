@@ -11,6 +11,47 @@ namespace S2A.Services.Tests
         [UnmanagedCallersOnly] private static uint AutoplayP2Right() => 1u << 14;   // S2A_AP_RIGHT（十字键右）
         [UnmanagedCallersOnly] private static uint AutoplayP1Left() => 1u << 12;    // S2A_AP_LEFT（十字键左）：自动玩家给一号的键
 
+        private static volatile int _testPlayerMask;
+        [UnmanagedCallersOnly] private static int PhysicalMask() => _testPlayerMask;
+        [UnmanagedCallersOnly] private static uint PhysicalSlot(int slot, int* sticks) => slot == 1 ? 2u : 0;
+
+        [SoloTest("--physical-hotplug", Booted = true)]
+        private static void PhysicalHotplugTest()
+        {
+            InputPump.Stop();
+            var oldRead = InputPump._vpadReadPad;
+            var oldMask = InputPump.PlayerMask;
+            try
+            {
+                _testPlayerMask = 3;
+                InputPump.PlayerMask = &PhysicalMask;
+                InputPump._vpadReadPad = &PhysicalSlot;
+                InputPump.InputHook = &PressA;
+                InputPump.SetPrimary(Host.Device, PlayerIndex.Player1, ControllerType.ProController);
+                InputPump.SetPads(Host.Device, 2);
+                foreach (int mask in new[] { 3, 2, 0, 1, 3, 1, 3 })
+                {
+                    _testPlayerMask = mask;
+                    string Snapshot(int slot)
+                    {
+                        ref var state = ref Host.Device.Hid.SharedMemory.Npads[slot].InternalState;
+                        return state.StyleSet == 0 ? "-" : ((ulong)state.FullKey.GetCurrentEntryRef().Buttons & 3).ToString();
+                    }
+                    string expected = ((mask & 1) != 0 ? "1" : "-") + "/" + ((mask & 2) != 0 ? "2" : "-");
+                    string Actual() => Snapshot(0) + "/" + Snapshot(1);
+                    for (int i = 0; i < 100 && Actual() != expected; i++) Thread.Sleep(10);
+                    Check($"实体手柄热插拔 {mask}（P1 按 A，P2 按 B）", expected, Actual());
+                }
+            }
+            finally
+            {
+                InputPump.Stop();
+                InputPump.InputHook = null;
+                InputPump.PlayerMask = oldMask;
+                InputPump._vpadReadPad = oldRead;
+            }
+        }
+
         // 本机双手柄（强制本地合作，如双人成行：游戏要两个已连接的手柄才进得了游戏）。期望按真机：
         //   ① 单手柄（缺省）配 Player1 Pro → 只有 Player1 连着，Player2 样式 0（负对照：不多出第二格）
         //   ② 手柄设置小程序声明至少 2 人 → 应答 true，Player1、Player2 都连着且是 Pro（FullKey = 1）

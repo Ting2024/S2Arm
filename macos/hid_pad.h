@@ -12,7 +12,7 @@ enum { S2A_HID_PAD_MAX = 8 };   // 设备表：GameController 已列出（让位
 // buttons 位序 = front_mac.m sample_coded_state 的键名表：east south north west leftStick rightStick leftShoulder rightShoulder
 //   leftTrigger rightTrigger menu options dpadLeft dpadUp dpadRight dpadDown；摇杆 -32767..32767，上 / 右为正（同 GameController）
 //   pro / vid / gc_hint / age_us：给 front_mac.m 每拍调 s2a_hidg_route 判占不占位（gc_hint = supportsHIDDevice 的答复，age_us = 接上多久）
-typedef struct { uint32_t buttons; int16_t lx, ly, rx, ry; const void *id; char name[96]; int pro, vid, gc_hint; uint64_t age_us; } s2a_hid_pad;
+typedef struct { uint32_t buttons; int16_t lx, ly, rx, ry; const void *id; char name[96]; int pro, custom_driver, vid, gc_hint; uint64_t age_us; } s2a_hid_pad;
 
 // 起 IOHID 监听（只起一次，主线程调；回调在主线程跑）
 void s2a_mac_hid_pad_start(void);

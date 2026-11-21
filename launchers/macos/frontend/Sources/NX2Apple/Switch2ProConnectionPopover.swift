@@ -171,6 +171,21 @@ struct Switch2ProConnectionPopover: View {
                     Text(t("thirdPartyMotion")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("controller.system.motionHint")
                     // 四键布局的按钮挪到玩家那一行最右边（11-20：Switch 2 也能自定按键，每位玩家各开各的）
+                    ForEach(systems.driverPads) { pad in
+                        Picker(pad.name.isEmpty ? t("gameController") : pad.name, selection: Binding(
+                            get: { pad.choice }, set: { systems.selectDriver($0, for: pad.id) }
+                        )) {
+                            Text(pad.choice == "auto" && pad.resolved != nil
+                                 ? t("driver.auto") + " · " + t("driver." + (pad.resolved ?? "standard"))
+                                 : t("driver.auto")).tag("auto")
+                            Text(t("driver.standard")).tag("standard")
+                            ForEach(systems.availableDrivers, id: \.self) { id in Text(t("driver." + id)).tag(id) }
+                        }
+                    }
+                    if !systems.driverPads.isEmpty {
+                        Text(t(systems.driverSaveFailed ? "driver.saveError" : "driver.apply"))
+                            .font(.manrope(12)).foregroundStyle(.secondary)
+                    }
                     Button(t("openBluetooth")) { SystemControllers.openBluetoothSettings() }
                         .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                         .controllerID("controller.system.settings")

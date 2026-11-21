@@ -2,6 +2,7 @@
 //   面板里每只一块（标题 + 「打开蓝牙设置」）、并进「玩家」列表（照 #520 UI 稿 system.html）。NS2 手柄走 S2Arm 自己的连接，不在这里重复列
 import AppKit
 import Combine
+import LauncherPadBridge
 import GameController
 
 @MainActor
@@ -23,6 +24,13 @@ final class SystemControllers: ObservableObject {
     private var systemPlayers: [PlayerAssignment.SystemKey: Int] = [:]
     /// 接着的 HID 手柄名（HIDFallbackPads）；面板列 fallback（GameController 认不出、宿主按 HID 兜底读的，#1151）
     @Published private(set) var hidNames: [String] = []
+    @Published private(set) var driverPads: [HIDFallbackPads.DriverPad] = []
+    @Published private(set) var driverSaveFailed = false
+    var availableDrivers: [String] { S2ABluetoothDrivers.identifiers() }
+    func selectDriver(_ choice: String, for key: String) {
+        driverSaveFailed = !S2ABluetoothDrivers.saveChoice(choice, forKey: key)
+        hidWatcher?.publish()
+    }
     var fallback: [String] { HIDFallbackPads.listed(hid: hidNames, system: pads.map(\.name)) }
     private var observers: [NSObjectProtocol] = []
     private var gen1Watcher: Gen1HIDWatcher?
@@ -42,7 +50,12 @@ final class SystemControllers: ObservableObject {
         }
         gen1Watcher = watcher
         let hid = HIDFallbackPads()
-        hid.observe { [weak self] names in Task { @MainActor in self?.hidNames = names } }
+        hid.observe { [weak self] names, pads in
+            Task { @MainActor in
+                self?.hidNames = names
+                self?.driverPads = pads
+            }
+        }
         hidWatcher = hid
         let center = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect, NSApplication.didBecomeActiveNotification] {

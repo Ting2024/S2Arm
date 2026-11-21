@@ -4,6 +4,7 @@
 #endif
 #include <stdio.h>
 #include "hid_generic.h"
+#include "pad_drivers/registry.h"
 
 static int fails, checks;
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); } } while (0)
@@ -16,6 +17,14 @@ static uint32_t press(const char *map, int usage) {   // 只按 HID 按键号 us
 }
 
 int main(void) {
+    CHECK(s2a_hidg_betop_ns("BEITONG Zeus", "Switch Pro Controller", 0, 0), "北通品牌并明确 Switch 模式");
+    CHECK(s2a_hidg_betop_ns("", "北通宙斯", 0x057e, 0x2009), "北通品牌并使用 NS Pro 身份");
+    CHECK(!s2a_hidg_betop_ns("Nintendo", "Pro Controller", 0x057e, 0x2009), "原厂或仿冒 Pro 不能仅凭编号判北通");
+    CHECK(!s2a_hidg_betop_ns("BETOP", "Zeus Xbox Controller", 0, 0), "北通的其他工作模式沿用系统驱动");
+    const s2a_driver *manual = s2a_driver_resolve("betop-ns", "", "Pro Controller", 0x057e, 0x2009);
+    CHECK(manual && manual->protocol == S2A_DRIVER_SWITCH_PRO, "手选北通覆盖同名 Pro");
+    CHECK(!s2a_driver_resolve("standard", "BETOP", "Switch", 0, 0), "标准驱动覆盖自动识别");
+    CHECK(!s2a_driver_resolve("unknown", "BETOP", "Switch", 0, 0), "旧宿主忽略未知驱动");
     // 缺省按钮：八位堂 D-input 编号 1 A、2 B、4 X、5 Y、7 / 8 L / R、9 / 10 ZL / ZR、11 −、12 +、14 / 15 摇杆按下；按位置给（右 A 下 B 上 X 左 Y）
     //   1 号是八位堂的 A（下）→ 位置 B；2 号（右）→ A；4 号（左）→ Y；5 号（上）→ X
     CHECK(press(NULL, 2) == A && press(NULL, 1) == B && press(NULL, 5) == X && press(NULL, 4) == Y, "缺省四颗面键按位置");

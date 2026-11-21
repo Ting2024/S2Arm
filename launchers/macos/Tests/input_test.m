@@ -1269,6 +1269,23 @@ static void test_shared_input_config(void) {
 int main(int argc, const char **argv) {
     setenv("S2A_PAD_ORDER_FILE", "/nonexistent/s2arm-pad-order.json", 1);   // 不读本机分配过的顺序表（#520 E）
     setenv("S2A_PAD_FACE_FILE", "/nonexistent/s2arm-face.json", 1);
+    {
+        GCController *gc = [GCController controllerWithExtendedGamepad];
+        s2a_hid_pad pads[2] = {{0}};
+        snprintf(pads[0].name, sizeof pads[0].name, "%s", gc.productCategory.UTF8String);
+        expect(driver_system_index(pads, 1, 0, @[gc]) == S2A_DRIVER_SEPARATE, "standard path is untouched");
+        pads[0].custom_driver = 1;
+        expect(driver_system_index(pads, 1, 0, @[]) == S2A_DRIVER_SEPARATE, "HID-only driver owns a slot");
+        expect(driver_system_index(pads, 1, 0, @[gc]) == 0, "selected driver replaces one system slot");
+        pads[1] = pads[0];
+        expect(driver_system_index(pads, 2, 0, @[gc, gc]) == 0 && driver_system_index(pads, 2, 1, @[gc, gc]) == 1,
+               "two selected same-name HID pads each replace one system slot");
+        expect(driver_system_index(pads, 2, 0, @[gc]) == 0 && driver_system_index(pads, 2, 1, @[gc]) == S2A_DRIVER_SEPARATE,
+               "both physical pads remain available while GC is still enumerating");
+        pads[1].custom_driver = 0;
+        expect(driver_system_index(pads, 2, 0, @[gc, gc]) == S2A_DRIVER_AMBIGUOUS, "mixed same-name drivers preserve system routing");
+        expect(driver_system_index(pads, 1, 0, @[gc, gc]) == S2A_DRIVER_AMBIGUOUS, "same-name system pads are not claimed");
+    }
     // 兜底手柄体感（11-16 第三方 Switch 模式手柄）：0x30 报告第 13 字节起 3 组 IMU，取最后一组（13 + 24）。期望手算：
     //   加速度 x 原始 4096 × 0.000244 = 0.999424 g → 按 Pro 轴向落到输出 y；角速度 x 原始 1000 × 0.06103 = 61.03 度/秒 → 输出 gyro_y；z 原样
     {   uint8_t r[64] = {0x30}; const uint8_t *last = r + 13 + 24; (void)last;

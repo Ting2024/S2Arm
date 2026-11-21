@@ -814,6 +814,7 @@ _Static_assert(S2A_MAX_PADS == sizeof g_slot_style / sizeof g_slot_style[0], "g_
 #define S2A_LIVE_MAX (NS2_RELAY_PLAYERS + 8)   // 一拍里在线的候选：通道玩家 + 系统手柄 + 键盘，超出槽位的由 s2a_slot_plan 判 -1
 static _Atomic uint32_t pad_buttons[S2A_MAX_PADS];
 static _Atomic int32_t pad_sticks[S2A_MAX_PADS][4];
+static _Atomic int driver_player_mask = -1;   // 双扩展驱动本局开始独立分槽后，0 也表示两只都已断开
 static _Atomic int pad_live = 1;   // 本次采样占到的最高槽位 + 1（键盘 / 鼠标 / 触屏也算一位）
 // 槽位身份（分槽用）与系统手柄的强引用：手柄蓝牙休眠 / 断开时系统会释放 GCController，只存裸指针会变悬空，
 //   下一次比较身份时就是野指针。强引用后对象不会提前释放，断开时靠整表重建清槽，置 nil 才真正释放。只在主线程读写。
@@ -1250,6 +1251,34 @@ static gen1_unit *gen1_unit_for(const char *key, const char *left, const char *r
     }
     return u;
 }
+// GameController 不公开 HID 设备 ID。同名设备都选了扩展驱动时，系统条目只提供槽位，按键和摇杆始终来自各自的 HID。
+enum { S2A_DRIVER_SEPARATE = -1, S2A_DRIVER_AMBIGUOUS = -2 };
+static int driver_system_index(const s2a_hid_pad *hid, int count, int h, NSArray<GCController *> *controllers) {
+    if (!hid[h].custom_driver) return S2A_DRIVER_SEPARATE;
+    NSString *name = @(hid[h].name);
+    int physical = 0, ordinal = 0;
+    BOOL mixed = NO;
+    for (int j = 0; j < count; j++) {
+        if (strcmp(hid[j].name, hid[h].name)) continue;
+        physical++;
+        if (j < h) ordinal++;
+        if (!hid[j].custom_driver) mixed = YES;
+    }
+    int matched = 0, owner = S2A_DRIVER_SEPARATE;
+    for (NSUInteger i = 0; i < controllers.count; i++) {
+        GCController *c = controllers[i];
+        if (![c.vendorName isEqualToString:name] && ![c.productCategory isEqualToString:name]) continue;
+        if (mixed || ++matched > physical) return S2A_DRIVER_AMBIGUOUS;
+        // 另一只 HID 的产品名也匹配这个系统条目的别名，无法归到唯一一组。
+        for (int j = 0; j < count; j++) {
+            if (!strcmp(hid[j].name, hid[h].name)) continue;
+            NSString *other = @(hid[j].name);
+            if ([c.vendorName isEqualToString:other] || [c.productCategory isEqualToString:other]) return S2A_DRIVER_AMBIGUOUS;
+        }
+        if (matched - 1 == ordinal) owner = (int)i;
+    }
+    return owner;
+}
 static void sample_input(void) {
     int32_t kbd_sticks[4] = {0}; uint32_t kbd_buttons = 0;
     uint32_t slot_buttons[S2A_MAX_PADS] = {0};
@@ -1358,7 +1387,47 @@ static void sample_input(void) {
             live_ids[n] = u; live_pads[n] = nil; live_ctrls[n] = nil; live_ble[n] = S2A_PAD_ORDER_GEN1; live_key[n] = u->key; n++;
         }
     }
-    for (GCController *c in GCController.controllers) {
+    static s2a_hid_pad hid[S2A_HID_PAD_MAX];
+    int nh = s2a_mac_hid_pad_read(hid);
+    NSArray<GCController *> *controllers = GCController.controllers;
+    // HID 和 GC 的拔插通知可能不同拍。记住已由驱动接管的系统对象，避免它在 HID 离线后又冒充一只手柄。
+    static NSHashTable<GCController *> *driverAliases;
+    BOOL independent = atomic_load(&driver_player_mask) >= 0;
+    if (!driverAliases) driverAliases = [NSHashTable weakObjectsHashTable];
+    if (!independent) [driverAliases removeAllObjects];
+    int driverOwner[S2A_HID_PAD_MAX];
+    for (int h = 0; h < nh; h++) driverOwner[h] = driver_system_index(hid, nh, h, controllers);
+    for (int h = 0; h < nh; h++) {
+        if (driverOwner[h] >= 0) [driverAliases addObject:controllers[driverOwner[h]]];
+        if (!independent || driverOwner[h] != S2A_DRIVER_AMBIGUOUS) continue;
+        BOOL allOwned = YES;
+        NSString *name = @(hid[h].name);
+        for (int j = 0; j < nh; j++)
+            if (!strcmp(hid[j].name, hid[h].name) && !hid[j].custom_driver) allOwned = NO;
+        for (GCController *c in controllers)
+            if (([c.vendorName isEqualToString:name] || [c.productCategory isEqualToString:name]) &&
+                ![driverAliases containsObject:c]) allOwned = NO;
+        if (allOwned) driverOwner[h] = S2A_DRIVER_SEPARATE;
+    }
+    for (NSUInteger index = 0; index < controllers.count; index++) {
+        GCController *c = controllers[index];
+        if (n >= S2A_LIVE_MAX) break;
+        int replacement = -1;
+        for (int h = 0; h < nh; h++) if (driverOwner[h] == (int)index) { replacement = h; break; }
+        if (replacement >= 0) {
+            const s2a_hid_pad *pad = &hid[replacement];
+            live_ids[n] = pad->id; live_pads[n] = nil; live_hid[n] = pad; live_ble[n] = -1;
+            live_key[n] = (c.vendorName ?: c.productCategory).UTF8String;
+            n++;
+            continue;
+        }
+        if (independent && [driverAliases containsObject:c]) {
+            BOOL standard = NO;
+            for (int h = 0; h < nh; h++)
+                if (!hid[h].custom_driver && ([c.vendorName isEqualToString:@(hid[h].name)] ||
+                    [c.productCategory isEqualToString:@(hid[h].name)])) standard = YES;
+            if (!standard) continue;
+        }
         GCExtendedGamepad *p = c.extendedGamepad;
         if (!p && !pad_has_profile_buttons(c)) continue;   // 只有通用物理描述的手柄也进槽位（sample_profile_state）
         // 同一只 NS2 手柄也出现在系统手柄列表里：通道那一路已经读了，这里不再占一位玩家
@@ -1367,21 +1436,20 @@ static void sample_input(void) {
             if (noted != c) { noted = c; fprintf(stderr, "[s2a] 系统手柄「%s」是 NS2 手柄，已由 S2Arm 连接读取，不另占玩家位\n", c.productCategory.UTF8String ?: "?"); }
             continue;
         }
-        if (n >= S2A_LIVE_MAX) break;
         live_ids[n] = (__bridge const void *)c; live_pads[n] = p; live_ctrls[n] = c; live_ble[n] = -1; n++;
     }
     // 兜底手柄（macos/hid_pad.m，#934）：GameController 认不出的 HID 手柄，排在系统手柄后面；占不占位按 s2a_hidg_route（hid_generic.h）：
     //   系统已枚举到同名手柄就让位（不变成两个玩家，后被认出也照判）；通用手柄另让原生厂商、系统说认得的先等 2 秒。分配玩家里同系统手柄（按名字 + 第几只认）
-    static s2a_hid_pad hid[S2A_HID_PAD_MAX];
-    int nh = s2a_mac_hid_pad_read(hid);
     for (int h = 0; h < nh && n < S2A_LIVE_MAX; h++) {
         BOOL seen = NO;
-        for (GCController *c in GCController.controllers) if ([c.vendorName isEqualToString:@(hid[h].name)]) { seen = YES; break; }
-        if (s2a_hidg_route(hid[h].pro, hid[h].vid, hid[h].gc_hint, seen, hid[h].age_us) != S2A_HIDG_TAKE) continue;
+        for (GCController *c in controllers) if ([c.vendorName isEqualToString:@(hid[h].name)]) { seen = YES; break; }
+        if (driverOwner[h] != S2A_DRIVER_SEPARATE) continue;
+        if (!hid[h].custom_driver && s2a_hidg_route(hid[h].pro, hid[h].vid, hid[h].gc_hint, seen, hid[h].age_us) != S2A_HIDG_TAKE) continue;
         live_ids[n] = hid[h].id; live_pads[n] = nil; live_ctrls[n] = nil; live_ble[n] = -1; live_hid[n] = &hid[h]; n++;
     }
     // 分配玩家：照顺序表排（表里的在前、没列的照原顺序接着），分配时没登记的系统手柄不进槽位；表一换就清槽位表重排
-    if (pad_order_refresh()) for (int i = 0; i < S2A_MAX_PADS; i++) { pad_id[i] = NULL; pad_owner[i] = nil; pad_slot_owner[i] = nil; }
+    BOOL reassigned = pad_order_refresh();
+    if (reassigned) for (int i = 0; i < S2A_MAX_PADS; i++) { pad_id[i] = NULL; pad_owner[i] = nil; pad_slot_owner[i] = nil; }
     // 键盘（含鼠标按键）分配成一位玩家（顺序表里有 keyboard）：自己占一个槽、不再并进槽 0；没分配就照旧并进玩家 1（没手柄时键盘就是玩家 1）
     BOOL kbd_own = g_order_loaded && s2a_pad_order_rank(&g_order, S2A_PAD_ORDER_KEYBOARD, NULL, 0) < S2A_PAD_ORDER_UNLISTED;
     if (kbd_own && n < S2A_LIVE_MAX) { live_ids[n] = &kbd_slot_id; live_pads[n] = nil; live_ctrls[n] = nil; live_ble[n] = S2A_PAD_ORDER_KEYBOARD; n++; }
@@ -1393,6 +1461,7 @@ static void sample_input(void) {
         int rank[S2A_LIVE_MAX], m = 0; NSMutableDictionary<NSString *, NSNumber *> *seen = [NSMutableDictionary new];
         for (int j = 0; j < n; j++) {
             NSString *name = live_ctrls[j] ? (live_ctrls[j].vendorName ?: live_ctrls[j].productCategory) : live_hid[j] ? @(live_hid[j]->name) : nil;
+            if (live_hid[j] && live_key[j]) name = @(live_key[j]);
             int index = name ? seen[name].intValue : 0;
             if (name) seen[name] = @(index + 1);
             rank[j] = s2a_pad_order_rank(&g_order, live_ble[j], live_key[j] ?: name.UTF8String, index);   // 一代按设备：照设备 id 认
@@ -1419,6 +1488,13 @@ static void sample_input(void) {
     int slot_of[S2A_LIVE_MAX];
     // 面板里登记成第几位就是游戏里的第几位（#1264：中途连上 DualSense、面板 P1 是它，宿主却照「已在玩的留原位」把玩家 1 留给原手柄，
     //   原手柄关掉后 DualSense 还在二号位，单人游戏读不到）；没登记的手柄照旧留原槽
+    int drivers = 0;
+    for (int j = 0; j < n; j++) {
+        if (!live_hid[j] || !live_hid[j]->custom_driver) continue;
+        drivers++;
+        // 同名手柄少一只时，启动器的名字序号会收紧；留在线上的实体仍占原玩家位。
+        if (independent && !reassigned) live_rank[j] = S2A_PAD_ORDER_UNLISTED;
+    }
     if (g_order_loaded) s2a_slot_pin(pad_id, live_ids, live_rank, n, S2A_MAX_PADS);
     int live = s2a_slot_plan(pad_id, live_ids, n, S2A_MAX_PADS, slot_of);
     // 断开清槽：整表重建，只有本轮还在的才写回（强引用随之释放，不会留悬空指针）
@@ -1486,6 +1562,12 @@ static void sample_input(void) {
         atomic_store(&pad_buttons[s], slot_buttons[s]);
         for (int i = 0; i < 4; i++) atomic_store(&pad_sticks[s][i], slot_sticks[s][i]);
     }
+    if (independent || drivers >= 2) {
+        int mask = 0;
+        for (int s = 0; s < S2A_MAX_PADS; s++) if (pad_id[s]) mask |= 1 << s;
+        if (atomic_exchange(&driver_player_mask, mask) != mask)
+            fprintf(stderr, "[输入] 实体玩家连接掩码 0x%x\n", mask);
+    }
     publish_input(slot_buttons[0], slot_sticks[0]);   // 玩家 1：旧 ABI + 事件驱动 ABI（含鼠标视角）
     publish_keyboard(muted);   // R5：键盘区原始键态（先落键态再唤醒，泵醒来读到同一拍）
     pthread_mutex_unlock(&g_compose_mu);
@@ -1508,6 +1590,7 @@ void s2a_mac_ns2_input_changed(void) {
 }
 // 多手柄槽位（服务层 InputPump 按符号查；没导出时退回旧的单手柄 ABI）
 __attribute__((visibility("default"), used)) int s2a_vpad_pad_count(void) { return atomic_load(&pad_live); }
+__attribute__((visibility("default"), used)) int s2a_vpad_player_mask(void) { return atomic_load(&driver_player_mask); }
 __attribute__((visibility("default"), used)) uint32_t s2a_vpad_read_pad(int index, int32_t *sticks) {
     if (index < 0 || index >= S2A_MAX_PADS) { for (int i = 0; i < 4; i++) sticks[i] = 0; return 0; }
     uint32_t buttons = atomic_load_explicit(&pad_buttons[index], memory_order_seq_cst);
@@ -2223,6 +2306,7 @@ void s2a_front_run(void (*guest_main)(void)) {
         [app run];
         s2a_pad_set_active(0);
         display_focus_publish_ex(NO, NO);
+        atomic_store(&driver_player_mask, -1);
         set_mouse_capture(NO); focused = NO; input_mute_refresh(); reset_input(); s2a_mac_ns2_detach(); front_layer_detach();
     }
 }

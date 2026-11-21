@@ -5,11 +5,18 @@
 //   GameController 已认出的同名手柄由宿主让位，这里同样不重复列（listed）
 import Foundation
 import IOKit.hid
+import LauncherPadBridge
 
 final class HIDFallbackPads {
     private var manager: IOHIDManager?
     private var present: [IOHIDDevice] = []
-    private var onNames: (([String]) -> Void)?
+    struct DriverPad: Identifiable {
+        let id: String
+        let name: String
+        let choice: String
+        let resolved: String?
+    }
+    private var onNames: (([String], [DriverPad]) -> Void)?
 
     /// 名字带「Pro Controller」（大小写不敏感，同宿主 s2a_hidg_is_pro）：宿主走 Switch Pro 协议那一支，面板按 Pro 样式手柄画
     static func isPro(_ name: String) -> Bool { name.range(of: "Pro Controller", options: .caseInsensitive) != nil }
@@ -23,7 +30,7 @@ final class HIDFallbackPads {
     }
 
     /// 一直看接上的 HID 手柄（启动器开着就开）；接上 / 断开就报一次现在的全部设备名
-    func observe(_ handler: @escaping ([String]) -> Void) {
+    func observe(_ handler: @escaping ([String], [DriverPad]) -> Void) {
         onNames = handler
         guard manager == nil else { publish(); return }
         let m = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -44,12 +51,22 @@ final class HIDFallbackPads {
         IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone))
         manager = m
     }
-    private func publish() {
-        onNames?(present.compactMap { device in
+    func publish() {
+        var names: [String] = []
+        var pads: [DriverPad] = []
+        var keys = Set<String>()
+        for device in present {
             let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? ""
             let vendor = (IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
-            return Self.hostReads(name: name, vendor: vendor) ? name : nil
-        })
+            var resolved: String?
+            if let key = S2ABluetoothDrivers.key(for: device) {
+                guard keys.insert(key).inserted else { continue }
+                resolved = S2ABluetoothDrivers.resolved(for: device)
+                pads.append(DriverPad(id: key, name: name, choice: S2ABluetoothDrivers.choice(forKey: key), resolved: resolved))
+            }
+            if resolved != nil || Self.hostReads(name: name, vendor: vendor) { names.append(name) }
+        }
+        onNames?(names, pads)
     }
     deinit {
         guard let m = manager else { return }

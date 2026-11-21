@@ -44,3 +44,5 @@ int s2a_xbox_gip_relay_start(const char *socket_path, s2a_xbox_gip_status_cb cb,
 int s2a_xbox_gip_relay_start_ex(const char *socket_path, int enable_usb, s2a_xbox_gip_status_cb cb, void *ctx);
 int s2a_xbox_gip_relay_publish_for_test(const void *raw, size_t len);
 void s2a_xbox_gip_relay_stop(void);
+
+#import "BluetoothDrivers.h"

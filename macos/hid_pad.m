@@ -12,6 +12,7 @@
 #import <GameController/GameController.h>
 #define S2A_XBOX_GIP_IOKIT 1
 #include "hid_pad.h"
+#include "pad_drivers/device.h"
 #include "xbox_gip_relay.h"
 #include <pthread.h>
 #include <string.h>
@@ -87,7 +88,7 @@ int s2a_gip_ack(const uint8_t *r, size_t n, uint8_t ack[13]) { return s2a_xbox_g
 int s2a_gip_parse(const uint8_t *r, size_t n, uint32_t *buttons, int16_t ax[4]) { return s2a_xbox_gip_parse_report(r, n, buttons, ax); }
 
 typedef struct { IOHIDDeviceRef dev; uint32_t buttons, hat; int16_t ax[4]; char name[96];
-    int pro, vid, gc_hint, joined, is_xbox, xbox_relay; uint8_t relay_slot; uint64_t entry, attach_us; s2a_hidg g;   // pro：走 Switch Pro 协议那一支；g：通用手柄的状态（hid_generic.h）；joined：通用手柄按过键；is_xbox：走 Xbox GIP 协议；xbox_relay：由 S2Arm 启动器中继
+    int pro, custom_driver, vid, gc_hint, joined, is_xbox, xbox_relay; uint8_t relay_slot; uint64_t entry, attach_us; s2a_hidg g;   // pro：走 Switch Pro 协议那一支；g：通用手柄的状态（hid_generic.h）；joined：通用手柄按过键；is_xbox：走 Xbox GIP 协议；xbox_relay：由 S2Arm 启动器中继
     int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr;
     s2a_pad_motion motion; uint64_t motion_us; int imu_said; uint32_t logged; } hp_dev;   // motion：0x30 报告里的最后一组 IMU（motion_us = 收到时刻，0 = 没有）   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
 static hp_dev g_dev[S2A_HID_PAD_MAX];
@@ -198,9 +199,12 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     int vid = 0, pid = 0; CFNumberRef n;
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &vid);
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &pid);
-    int pro = s2a_hidg_is_pro(name);
+    NSString *driverKey = s2a_driver_key(dev);
+    const s2a_driver *driver = s2a_device_driver(dev, driverKey);
+    int pro = driver ? driver->protocol == S2A_DRIVER_SWITCH_PRO : s2a_hidg_is_pro(name);
+    if (driver) fprintf(stderr, "[输入] %s：使用蓝牙驱动 %s\n", name, driver->id);
     // 微软 / 索尼 / 任天堂的通用手柄系统自己认（名字未必等于 HID 产品名，按名字让位认不出同一只），这里不接；记一行便于诊断（#1276）
-    if (!pro && s2a_hidg_native_vendor(vid)) { fprintf(stderr, "[输入] HID 游戏手柄：%s（厂商 / 产品号 0x%x / 0x%x）是系统原生认得的厂商，交给 GameController\n", name[0] ? name : "（没名字）", vid, pid); return; }
+    if (!driver && !pro && s2a_hidg_native_vendor(vid)) { fprintf(stderr, "[输入] HID 游戏手柄：%s（厂商 / 产品号 0x%x / 0x%x）是系统原生认得的厂商，交给 GameController\n", name[0] ? name : "（没名字）", vid, pid); return; }
     // IOHIDManager 按每条匹配条件各给一次、每次是新的 IOHIDDeviceRef：按 I/O Registry 条目认同一只（同参考实现），不变成两个玩家
     uint64_t entry = 0; IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(dev), &entry);
     int gc_hint = [GCController supportsHIDDevice:dev];   // 每只只问一次（调用不便宜）
@@ -210,7 +214,7 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     for (int i = 0; i < S2A_HID_PAD_MAX && !d; i++) if (!g_dev[i].dev && !g_dev[i].is_xbox) d = &g_dev[i];
     if (!d) { pthread_mutex_unlock(&g_mu); fprintf(stderr, "[输入] 兜底手柄：已满 %d 只，%s 不接\n", S2A_HID_PAD_MAX, name); return; }
     memset(d, 0, sizeof *d); d->dev = dev; snprintf(d->name, sizeof d->name, "%s", name);
-    d->pro = pro; d->vid = vid; d->gc_hint = gc_hint; d->entry = entry; d->attach_us = hp_now_us();
+    d->custom_driver = driver != NULL; d->pro = pro; d->vid = vid; d->gc_hint = gc_hint; d->entry = entry; d->attach_us = hp_now_us();
     if (!pro) {
         const char *map = getenv("S2A_HID_MAP"); if (!map) map = getenv("DM_HID_MAP");   // 也认参考实现的变量名
         s2a_hidg_init(&d->g, map);
@@ -228,7 +232,7 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     s2a_pro_cal_default(&d->cl); s2a_pro_cal_default(&d->cr);
     IOHIDDeviceRegisterInputValueCallback(dev, value_cb, d);
     IOHIDDeviceRegisterInputReportCallback(dev, d->rep, sizeof d->rep, report_cb, d);
-    fprintf(stderr, "[输入] 兜底手柄：接上 %s（厂商 / 产品号 0x%x / 0x%x，GameController 不认）：先按 HID 元素直读，同时发 Switch Pro 子命令切完整报告、点玩家灯\n", name, vid, pid);
+    fprintf(stderr, "[输入] 兜底手柄：接上 %s（厂商 / 产品号 0x%x / 0x%x）：先按 HID 元素直读，同时发 Switch Pro 子命令切完整报告、点玩家灯\n", name, vid, pid);
     // 子命令之间隔 50 ms（蓝牙手柄连发会丢）：读出厂摇杆校准 → 切完整报告 0x30 → 点玩家灯
     int slot = (int)(d - g_dev);
     static const uint8_t spi[] = {0x3D, 0x60, 0x00, 0x00, 18};
@@ -733,7 +737,7 @@ int s2a_mac_hid_pad_read(s2a_hid_pad out[S2A_HID_PAD_MAX]) {
         if (d->pro) { o->buttons = d->buttons | d->hat; o->lx = d->ax[0]; o->ly = d->ax[1]; o->rx = d->ax[2]; o->ry = d->ax[3]; }
         else { int16_t st[4]; s2a_hidg_sticks(&d->g, st); o->buttons = s2a_hidg_buttons(&d->g); o->lx = st[0]; o->ly = st[1]; o->rx = st[2]; o->ry = st[3]; }
         o->id = &g_dev[i]; snprintf(o->name, sizeof o->name, "%s", d->name);
-        o->pro = d->pro; o->vid = d->vid; o->gc_hint = d->gc_hint; o->age_us = hp_now_us() - d->attach_us;
+        o->custom_driver = d->custom_driver; o->pro = d->pro; o->vid = d->vid; o->gc_hint = d->gc_hint; o->age_us = hp_now_us() - d->attach_us;
     }
     pthread_mutex_unlock(&g_mu);
     return n;
