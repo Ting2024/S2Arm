@@ -135,6 +135,7 @@ static int nvn_be_shutdown_session_body(void) {
         tbuf_view_free_entry(g_tbuf_views.vals[i], 0);
     }
     nvn_hm_clear(&g_tbuf_views, NULL);
+    nvn_hm_clear(&g_tbuf_view_by_ptr, NULL);
     if (g_tbuf_view_set) CFSetRemoveAllValues(g_tbuf_view_set);
     ptba_session_reset();
     nvn_hm_clear(&g_cpu_tex, NULL);

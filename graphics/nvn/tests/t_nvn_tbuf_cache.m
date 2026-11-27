@@ -230,6 +230,17 @@ int main(int argc, char **argv) { @autoreleasepool {
         CHECK(u1 - u0 == 1 && u2 == u1 && s1 == s0 && vals_ok,
               "①b finalized registered R32UI buffer texture after NGHOST overflow: initial upgrade +%llu, post-evict upgrades +%llu (ser_gen +%llu) gpu=%d",
               (unsigned long long)(u1 - u0), (unsigned long long)(u2 - u1), (unsigned long long)(s1 - s0), vals_ok);
+
+        // ①c: atomic-capable R32UI TARGET_BUFFER viewed as R32Float via img_fit must drop ShaderAtomic (Metal aborts on R32Float+ShaderAtomic)
+        os_unfair_lock_lock(&g_rmu);
+        id<MTLTexture> abuf = tex_by_id(1);
+        uint64_t f_rid = 0;
+        id<MTLTexture> fview = img_fit(1, abuf, NVN_DPF_FLOAT, &f_rid);
+        os_unfair_lock_unlock(&g_rmu);
+        int f_ok = abuf != nil && tex_atomic_usage(abuf) && fview != nil && fview.pixelFormat == MTLPixelFormatR32Float &&
+                   !(fview.usage & MTLTextureUsageShaderAtomic) && f_rid != 0;
+        CHECK(f_ok, "①c atomic R32UI buffer texture cross-class float view via img_fit: view=%p pf=%lu atomic=%d rid=%llu",
+              (__bridge void *)fview, (unsigned long)fview.pixelFormat, fview ? tex_atomic_usage(fview) : -1, (unsigned long long)f_rid);
     }
 
     // ②a & ②b: TARGET_BUFFER g_tbuf_views reuse across serial churn, pool_seen zero re-walk, & nvn_be_pool_del invalidation

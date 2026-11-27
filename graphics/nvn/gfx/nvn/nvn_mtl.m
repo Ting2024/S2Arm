@@ -3732,17 +3732,29 @@ typedef struct { uint64_t mem; uint32_t width, pf, pad; uint64_t want_usage; } t
 typedef struct {
     tbuf_view_key k;
     __unsafe_unretained id<MTLBuffer> buf;
+    void *ptr;
     uint64_t off, last_fence;
     __strong id<MTLTexture> strong;
     __weak id<MTLTexture> weak;
 } tbuf_view_e;
 static nvn_hmap g_tbuf_views = {.klen = sizeof(tbuf_view_key)};
+static nvn_hmap g_tbuf_view_by_ptr = {.klen = sizeof(void *)};   // (__bridge void *)mt -> tbuf_view_e * (under g_smu)
 static CFMutableSetRef g_tbuf_view_set;   // strong set identity under g_smu (O(1) tbuf_view_has check)
 static int tbuf_view_has(id o) {   // caller holds g_smu (matches alias_has)
     return o && g_tbuf_view_set && CFSetContainsValue(g_tbuf_view_set, (__bridge const void *)o);
 }
+static void tbuf_ptr_bind(tbuf_view_e *e, __unsafe_unretained id<MTLTexture> mt) {   // caller holds g_smu
+    void *np = (__bridge void *)mt;
+    if (e->ptr && e->ptr != np) {
+        if (nvn_hm_get(&g_tbuf_view_by_ptr, &e->ptr) == e) nvn_hm_del(&g_tbuf_view_by_ptr, &e->ptr);
+    }
+    e->ptr = np;
+    if (np) nvn_hm_put(&g_tbuf_view_by_ptr, &np, e);
+}
 static void tbuf_view_free_entry(tbuf_view_e *e, int defer_strong) {
     if (!e) return;
+    if (e->ptr && nvn_hm_get(&g_tbuf_view_by_ptr, &e->ptr) == e) nvn_hm_del(&g_tbuf_view_by_ptr, &e->ptr);
+    e->ptr = NULL;
     if (e->strong) {
         if (g_tbuf_view_set) CFSetRemoveValue(g_tbuf_view_set, (__bridge const void *)e->strong);
         if (defer_strong) defer_obj_release(e->strong);
@@ -3788,6 +3800,7 @@ static void tbuf_view_store(const tbuf_view_key *k, id<MTLBuffer> buf, uint64_t 
             e->strong = nil;
         }
         e->buf = buf; e->off = off; e->last_fence = g_fence + 1; e->weak = mt;
+        tbuf_ptr_bind(e, mt);
         if (pin_strong) {
             e->strong = mt;
             if (!g_tbuf_view_set) g_tbuf_view_set = CFSetCreateMutable(NULL, 0, NULL);
@@ -3797,44 +3810,43 @@ static void tbuf_view_store(const tbuf_view_key *k, id<MTLBuffer> buf, uint64_t 
     }
     pthread_mutex_unlock(&g_smu);
 }
-static void tbuf_view_pin(id<MTLTexture> mt) {
-    if (!mt || mt.textureType != MTLTextureTypeTextureBuffer || !mt.buffer) return;
+static void tbuf_view_pin(__unsafe_unretained id<MTLTexture> mt) {
+    if (!mt) return;
+    void *p = (__bridge void *)mt;
     pthread_mutex_lock(&g_smu);
-    for (uint32_t i = 0; i < g_tbuf_views.cap; i++) {
-        tbuf_view_e *e = g_tbuf_views.vals[i];
-        if (!e) continue;
-        id<MTLTexture> cur = e->strong ?: e->weak;
-        if (cur == mt) {
+    tbuf_view_e *e = nvn_hm_get(&g_tbuf_view_by_ptr, &p);
+    if (e) {
+        if ((__bridge void *)e->strong == p) {
             e->last_fence = g_fence + 1;
-            if (!e->strong) {
+        } else if (!e->strong) {
+            id<MTLTexture> w = e->weak;
+            if (w == mt) {
+                e->last_fence = g_fence + 1;
                 e->strong = mt;
                 if (!g_tbuf_view_set) g_tbuf_view_set = CFSetCreateMutable(NULL, 0, NULL);
-                CFSetAddValue(g_tbuf_view_set, (__bridge const void *)mt);
+                CFSetAddValue(g_tbuf_view_set, p);
+            } else if (!w) {
+                nvn_hm_del(&g_tbuf_views, &e->k);
+                tbuf_view_free_entry(e, 1);
             }
-            break;
         }
     }
     pthread_mutex_unlock(&g_smu);
 }
 static void tbuf_view_upgrade(id<MTLTexture> base, id<MTLTexture> upgraded) {
     if (!base || !upgraded || base == upgraded) return;
+    void *p = (__bridge void *)base;
     pthread_mutex_lock(&g_smu);
-    for (uint32_t i = 0; i < g_tbuf_views.cap; i++) {
-        tbuf_view_e *e = g_tbuf_views.vals[i];
-        if (!e) continue;
-        id<MTLTexture> cur = e->strong ?: e->weak;
-        if (cur != base) continue;
+    tbuf_view_e *e = nvn_hm_get(&g_tbuf_view_by_ptr, &p);
+    if (e && ((__bridge void *)e->strong == p || (!e->strong && e->weak == base))) {
         if (e->strong) {
-            if (g_tbuf_view_set) CFSetRemoveValue(g_tbuf_view_set, (__bridge const void *)e->strong);
-            e->strong = upgraded;
-            if (!g_tbuf_view_set) g_tbuf_view_set = CFSetCreateMutable(NULL, 0, NULL);
-            CFSetAddValue(g_tbuf_view_set, (__bridge const void *)upgraded);
-        } else {
-            e->strong = upgraded;
-            if (!g_tbuf_view_set) g_tbuf_view_set = CFSetCreateMutable(NULL, 0, NULL);
-            CFSetAddValue(g_tbuf_view_set, (__bridge const void *)upgraded);
+            if (g_tbuf_view_set) CFSetRemoveValue(g_tbuf_view_set, p);
         }
+        e->strong = upgraded;
+        if (!g_tbuf_view_set) g_tbuf_view_set = CFSetCreateMutable(NULL, 0, NULL);
+        CFSetAddValue(g_tbuf_view_set, (__bridge const void *)upgraded);
         e->weak = upgraded; e->last_fence = g_fence + 1;
+        tbuf_ptr_bind(e, upgraded);
     }
     pthread_mutex_unlock(&g_smu);
 }
@@ -4230,7 +4242,7 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> asked, MTLTextu
     d.textureType = base.textureType; d.pixelFormat = base.pixelFormat; d.width = base.width; d.height = base.height; d.depth = base.depth;   // Keep the original format, only add the format-view usage
     d.arrayLength = base.arrayLength; d.mipmapLevelCount = base.mipmapLevelCount; d.sampleCount = base.sampleCount;
     d.storageMode = base.storageMode; d.cpuCacheMode = base.cpuCacheMode; d.hazardTrackingMode = base.hazardTrackingMode;
-    d.resourceOptions = base.resourceOptions; d.usage = base.usage | add | (tex_atomic_usage(base) ? MTLTextureUsageShaderAtomic : 0);
+    d.resourceOptions = base.resourceOptions; d.usage = base.usage | add | (pf_r32i(d.pixelFormat) && tex_atomic_usage(base) ? MTLTextureUsageShaderAtomic : 0);
     if (base.buffer) d.usage &= ~MTLTextureUsagePixelFormatView;   // buffer-backed textures do not preserve PixelFormatView
     // A texture-buffer view must retain its pool storage: copying it to a new
     // texture would disconnect native atomics from the old IMGA / buffer reads.
@@ -10214,7 +10226,7 @@ static id<MTLTexture> img_fit(int tid, id<MTLTexture> t, int dpf, uint64_t *rid)
     treg_drop_im(r);
     id<MTLTexture> v = nil;
     if (is_tbuf) {
-        MTLTextureUsage u_ = t.usage | (tex_atomic_usage(t) ? MTLTextureUsageShaderAtomic : 0);
+        MTLTextureUsage u_ = (t.usage & ~MTLTextureUsageShaderAtomic) | (pf_r32i(pf) && tex_atomic_usage(t) ? MTLTextureUsageShaderAtomic : 0);
         MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:pf width:t.width resourceOptions:t.buffer.resourceOptions usage:u_];
         v = [t.buffer newTextureWithDescriptor:d offset:t.bufferOffset bytesPerRow:t.bufferBytesPerRow];
         if (v && (u_ & MTLTextureUsageShaderAtomic)) tex_note_atomic(v);
@@ -13220,7 +13232,12 @@ static void ptba_retire_at(int i) {   // caller holds g_rmu
     ptba_e *e = &g_ptba[i];
     if (e->tex) { defer_obj_release(e->tex); e->tex = nil; }
     if (e->buf) { defer_obj_release(e->buf); e->buf = nil; }
-    g_ptba[i] = g_ptba[--g_nptba];
+    int last = --g_nptba;
+    if (i != last) {
+        g_ptba[i] = g_ptba[last];
+        g_ptba[last].tex = nil;
+        g_ptba[last].buf = nil;
+    }
 }
 static void ptba_drop_tid(int tid) {   // caller holds g_rmu
     for (int i = 0; i < g_nptba; ) { if (g_ptba[i].tid == tid) ptba_retire_at(i); else i++; }
@@ -13292,9 +13309,14 @@ static id<MTLTexture> ptba_get_or_make(int id_, id<MTLTexture> x) {   // caller 
     }
     if (g_nptba == g_cptba) {
         int c = g_cptba ? g_cptba * 2 : 32;
-        ptba_e *g = realloc(g_ptba, (size_t)c * sizeof *g);
+        ptba_e *g = calloc((size_t)c, sizeof *g);
         if (!g) { defer_obj_release(av); defer_obj_release(ab); return nil; }
-        memset(g + g_cptba, 0, (size_t)(c - g_cptba) * sizeof *g);
+        for (int i = 0; i < g_nptba; i++) {
+            g[i] = g_ptba[i];
+            g_ptba[i].tex = nil;
+            g_ptba[i].buf = nil;
+        }
+        free(g_ptba);
         g_ptba = g; g_cptba = c;
     }
     ptba_e *ne = &g_ptba[g_nptba++];
